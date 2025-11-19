@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Extreme Parkour with Legged Robots #
 <p align="center">
 <img src="./images/teaser.jpeg" width="80%"/>
@@ -88,3 +89,7 @@ journal={arXiv preprint arXiv:2309.14341},
 year={2023}
 }
 ```
+=======
+# go2_parkour
+go2_parkour
+>>>>>>> 1848819ddfadfac0f3683a54fa84ece28b1ab150
