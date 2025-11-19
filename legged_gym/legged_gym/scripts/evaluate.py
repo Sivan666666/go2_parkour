@@ -104,6 +104,15 @@ def play(args):
     env_cfg.terrain.max_difficulty = False
     
     env_cfg.depth.angle = [0, 1]
+    # our designed position
+    env_cfg.depth.position = [0.3, 0, 0.188]  # front camera
+    # env_cfg.depth.position_rand = 0.01  
+    # env_cfg.depth.angle = [10-1, 10+1]  # positive pitch down  #27-5,27+5
+
+    # env_cfg.depth.position = [0.3, 0, 0.147]  # front camera
+        # position_rand = 0.01  
+    env_cfg.depth.angle = [40-1, 40+1]  # positive pitch down  #27-5,27+5
+
     env_cfg.noise.add_noise = True
     env_cfg.domain_rand.randomize_friction = True
     env_cfg.domain_rand.push_robots = True

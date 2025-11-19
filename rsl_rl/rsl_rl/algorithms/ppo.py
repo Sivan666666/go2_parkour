@@ -143,7 +143,7 @@ class PPO:
         if self.actor_critic.is_recurrent:
             self.transition.hidden_states = self.actor_critic.get_hidden_states()
         # Compute the actions and values, use proprio to compute estimated priv_states then actions, but store true priv_states
-        if self.train_with_estimated_states:
+        if self.train_with_estimated_states: #True
             obs_est = obs.clone()
             priv_states_estimated = self.estimator(obs_est[:, :self.num_prop])
             obs_est[:, self.num_prop+self.num_scan:self.num_prop+self.num_scan+self.priv_states_dim] = priv_states_estimated

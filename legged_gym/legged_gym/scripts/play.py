@@ -66,14 +66,35 @@ def play(args):
     # override some parameters for testing
     if args.nodelay:
         env_cfg.domain_rand.action_delay_view = 0
-    env_cfg.env.num_envs = 16 if not args.save else 64
+    env_cfg.env.num_envs = 4 if not args.save else 64
     env_cfg.env.episode_length_s = 60
     env_cfg.commands.resampling_time = 60
+    
     env_cfg.terrain.num_rows = 5
     env_cfg.terrain.num_cols = 5
     env_cfg.terrain.height = [0.02, 0.02]
+    # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
+    #                                 "rough slope up": 0.0,
+    #                                 "rough slope down": 0.0,
+    #                                 "rough stairs up": 0., 
+    #                                 "rough stairs down": 0., 
+    #                                 "discrete": 0., 
+    #                                 "stepping stones": 0.0,
+    #                                 "gaps": 0., 
+    #                                 "smooth flat": 0,
+    #                                 "pit": 0.0,
+    #                                 "wall": 0.0,
+    #                                 "platform": 0.,
+    #                                 "large stairs up": 0.,
+    #                                 "large stairs down": 0.,
+    #                                 "parkour": 0.2,
+    #                                 "parkour_hurdle": 0.2,
+    #                                 "parkour_flat": 0.2,
+    #                                 "parkour_step": 0.2,
+    #                                 "parkour_gap": 0.2, 
+    #                                 "demo": 0.}
     env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-                                    "rough slope up": 0.0,
+                                    "rough slope up": 0.,
                                     "rough slope down": 0.0,
                                     "rough stairs up": 0., 
                                     "rough stairs down": 0., 
@@ -88,23 +109,38 @@ def play(args):
                                     "large stairs down": 0.,
                                     "parkour": 0.2,
                                     "parkour_hurdle": 0.2,
-                                    "parkour_flat": 0.,
+                                    "parkour_flat": 0.2,
                                     "parkour_step": 0.2,
                                     "parkour_gap": 0.2, 
-                                    "demo": 0.2}
+                                    "demo": 0.}
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
     env_cfg.terrain.max_difficulty = True
     
     env_cfg.depth.angle = [0, 1]
+
+    env_cfg.depth.position =  [0.355, 0, 0.065]
+    env_cfg.depth.angle = [20, 21]
+
+    env_cfg.depth.position = [0.3, 0, 0.147]  # front camera 
+    env_cfg.depth.angle = [29-0.1, 29+0.1]  # positive pitch down  #27-5,27+5
+
+    # for go2
+        # position = [0.3, 0, 0.08] # front camera 002-g2-camera 
+        # position = [0.355, 0, 0.065]
+        # angle = [20, 25]
+
+    env_cfg.depth.position = [0.3, 0, 0.188]  # front camera
+    env_cfg.depth.angle = [10-1, 10+1]  # positive pitch down  #27-5,27+5
+
     env_cfg.noise.add_noise = True
     env_cfg.domain_rand.randomize_friction = True
     env_cfg.domain_rand.push_robots = False
     env_cfg.domain_rand.push_interval_s = 6
     env_cfg.domain_rand.randomize_base_mass = False
     env_cfg.domain_rand.randomize_base_com = False
-
+    
     depth_latent_buffer = []
     # prepare environment
     env: LeggedRobot
@@ -135,6 +171,14 @@ def play(args):
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
     for i in range(10*int(env.max_episode_length)):
+        # # 强制设置 yaw 相关命令为0，保持直线行走
+        # env.commands[:, 2] = 0.0  # yaw rate command 设为0
+        
+        # # 如果你想保持特定的前进方向，可以设置：
+        env.commands[:, 0] = 0.5  # forward velocity
+        env.commands[:, 2] = 0.5  # lateral velocity
+
+
         if args.use_jit:
             if env.cfg.depth.use_camera:
                 if infos["depth"] is not None:
@@ -153,12 +197,14 @@ def play(args):
                     obs_student[:, 6:8] = 0
                     depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
                     depth_latent = depth_latent_and_yaw[:, :-2]
-                    yaw = depth_latent_and_yaw[:, -2:]
-                obs[:, 6:8] = 1.5*yaw
+                    yaw = depth_latent_and_yaw[:, -2:] * 0
+                # 不使用 yaw 修正，保持原始观测
+                obs[:, 6:8] = 1.5*yaw  # 注释掉这行
+                #obs[:, 6:8] = 0  # 强制设为0
                     
             else:
                 depth_latent = None
-            
+            obs[:, 6:8] = 0  # 强制设为0
             if hasattr(ppo_runner.alg, "depth_actor"):
                 actions = ppo_runner.alg.depth_actor(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
             else:

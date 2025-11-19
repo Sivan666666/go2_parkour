@@ -166,7 +166,34 @@ class LeggedRobot(BaseTask):
     def process_depth_image(self, depth_image, env_id):
         # These operations are replicated on the hardware
         depth_image = self.crop_depth_image(depth_image)
-        depth_image += self.cfg.depth.dis_noise * 2 * (torch.rand(1)-0.5)[0]
+
+        # depth_image += self.cfg.depth.dis_noise * 2 * (torch.rand(1)-0.5)[0] 原有的均匀噪声
+
+         
+        depth_image += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]
+        
+        # 添加随机像素点缺失(设为无穷大)
+        if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
+            # 生成随机mask,决定哪些像素点缺失
+            dropout_mask = torch.rand_like(depth_image) < self.cfg.depth.dropout_prob
+            depth_image[dropout_mask] = float('-inf')  # 设为负无穷(因为深度值是负的)
+        
+        # 添加椒盐噪声
+        if hasattr(self.cfg.depth, 'salt_pepper_prob') and self.cfg.depth.salt_pepper_prob > 0:
+            # 盐噪声(设为远端clip值)
+            salt_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+            depth_image[salt_mask] = -self.cfg.depth.far_clip
+            
+            # 椒噪声(设为近端clip值)
+            pepper_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+            depth_image[pepper_mask] = -self.cfg.depth.near_clip
+        
+        # 添加高斯噪声
+        if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
+            gaussian_noise = torch.randn_like(depth_image) * self.cfg.depth.gaussian_noise_std
+            depth_image += gaussian_noise
+
+
         depth_image = torch.clip(depth_image, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
         depth_image = self.resize_transform(depth_image[None, :]).squeeze()
         depth_image = self.normalize_depth_image(depth_image)
@@ -273,12 +300,21 @@ class LeggedRobot(BaseTask):
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             self.gym.clear_lines(self.viewer)
             # self._draw_height_samples()
-            self._draw_goals()
+            # self._draw_goals()
             self._draw_feet()
             if self.cfg.depth.use_camera:
                 window_name = "Depth Image"
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-                cv2.imshow("Depth Image", self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5)
+
+                scale_factor = 4
+                depth_image = self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5
+                height, width = depth_image.shape[:2]
+                new_height = int(height * scale_factor)
+                new_width = int(width * scale_factor)
+                resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+
+                cv2.imshow(window_name, resized_depth_image)
+                # cv2.imshow("Depth Image", self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5)
                 cv2.waitKey(1)
 
     def reindex_feet(self, vec):
@@ -876,10 +912,11 @@ class LeggedRobot(BaseTask):
 
             camera_handle = self.gym.create_camera_sensor(env_handle, camera_props)
             self.cam_handles.append(camera_handle)
-            
+            print(self.cam_handles)
             local_transform = gymapi.Transform()
             
-            camera_position = np.copy(config.position)
+            camera_position_center = np.copy(config.position)
+            camera_position = np.random.uniform(camera_position_center-config.position_rand, camera_position_center+config.position_rand)
             camera_angle = np.random.uniform(config.angle[0], config.angle[1])
             
             local_transform.p = gymapi.Vec3(*camera_position)

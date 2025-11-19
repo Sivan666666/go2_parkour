@@ -298,7 +298,9 @@ class OnPolicyRunner:
 
             delta_yaw_ok_percentage = sum(delta_yaw_ok_buffer) / len(delta_yaw_ok_buffer)
             scandots_latent_buffer = torch.cat(scandots_latent_buffer, dim=0)
+            print(f"scandots_latent_buffer 所在设备: {scandots_latent_buffer.device}")
             depth_latent_buffer = torch.cat(depth_latent_buffer, dim=0)
+            print(f"depth_latent_buffer 所在设备: {depth_latent_buffer.device}")
             depth_encoder_loss = 0
             # depth_encoder_loss = self.alg.update_depth_encoder(depth_latent_buffer, scandots_latent_buffer)
 

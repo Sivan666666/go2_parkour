@@ -92,8 +92,27 @@ class LeggedRobotCfg(BaseConfig):
         camera_terrain_num_rows = 10
         camera_terrain_num_cols = 20
 
-        position = [0.27, 0, 0.03]  # front camera
-        angle = [-5, 5]  # positive pitch down
+        # position = [0.27, 0, 0.03]  # front camera 001-g2-1023 checkpoint 31000
+ 
+        # for go2
+        # position = [0.3, 0, 0.08] # front camera 002-g2-camera 
+
+        # position = [0.355, 0, 0.065]
+        # angle = [20, 25]
+
+        # 1111111111111
+
+        # angle = [-5, 5]  # positive pitch down
+
+        # # helpful doggy
+        position = [0.3, 0, 0.147]  # front camera
+        position_rand = 0.01  
+        angle = [29-5, 29+5]  # positive pitch down  #27-5,27+5
+
+        # our designed position
+        # position = [0.3, 0, 0.188]  # front camera
+        # position_rand = 0.01  
+        # angle = [30-5, 30+5]  # positive pitch down  #27-5,27+5
 
         update_interval = 5  # 5 works without retraining, 8 worse
 
@@ -190,6 +209,27 @@ class LeggedRobotCfg(BaseConfig):
                         "parkour_step": 0.2,
                         "parkour_gap": 0.2,
                         "demo": 0.0,}
+        
+        # terrain_dict = {"smooth slope": 0., 
+        #                 "rough slope up": 0.0,
+        #                 "rough slope down": 0.0,
+        #                 "rough stairs up": 0., 
+        #                 "rough stairs down": 0., 
+        #                 "discrete": 0., 
+        #                 "stepping stones": 0.0,
+        #                 "gaps": 0., 
+        #                 "smooth flat": 0,
+        #                 "pit": 0.0,
+        #                 "wall": 0.0,
+        #                 "platform": 0.,
+        #                 "large stairs up": 0.,
+        #                 "large stairs down": 0.,
+        #                 "parkour": 0.0,
+        #                 "parkour_hurdle": 0.2,
+        #                 "parkour_flat": 0.2,
+        #                 "parkour_step": 0.2,
+        #                 "parkour_gap": 0.2,
+        #                 "demo": 0.2,}
         terrain_proportions = list(terrain_dict.values())
         
         # trimesh only:
