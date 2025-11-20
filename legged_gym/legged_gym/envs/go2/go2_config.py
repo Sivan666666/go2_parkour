@@ -106,18 +106,6 @@ class Go2RoughCfg( LeggedRobotCfg ):
         camera_terrain_num_rows = 10
         camera_terrain_num_cols = 20
 
-        # position = [0.27, 0, 0.03]  # front camera 001-g2-1023 checkpoint 31000
- 
-        # for go2
-        # position = [0.3, 0, 0.08] # front camera 002-g2-camera 
-
-        # position = [0.355, 0, 0.065]
-        # angle = [20, 25]
-
-        # 1111111111111
-
-        # angle = [-5, 5]  # positive pitch down
-
         # # helpful doggy
         position = [0.3, 0, 0.147]  # front camera
         position_rand = 0.01  
