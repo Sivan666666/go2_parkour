@@ -46,6 +46,32 @@ def train(args):
         os.makedirs(log_pth)
     except:
         pass
+
+    # ==========================================
+    # 🔥 备份配置文件到实验文件夹
+    # ==========================================
+    
+    # 1️⃣ 备份任务特定的配置文件（如 go2_config.py）
+    task_config_path = os.path.join(
+        LEGGED_GYM_ENVS_DIR, 
+        args.task,  # 例如 "go2"
+        f"{args.task}_config.py"  # 例如 "go2_config.py"
+    )
+    
+    if os.path.exists(task_config_path):
+        task_config_backup = os.path.join(log_pth, f"{args.task}_config.py")
+        copyfile(task_config_path, task_config_backup)
+        print(f"✅ Backed up config: {task_config_path} -> {task_config_backup}")
+    else:
+        print(f"⚠️  Warning: Task config not found at {task_config_path}")
+    
+    # 2️⃣ 备份基础配置文件（保留这部分！）
+    base_config_backup = os.path.join(log_pth, "legged_robot_config.py")
+    base_robot_backup = os.path.join(log_pth, "legged_robot.py")
+    copyfile(LEGGED_GYM_ENVS_DIR + "/base/legged_robot_config.py", base_config_backup)
+    copyfile(LEGGED_GYM_ENVS_DIR + "/base/legged_robot.py", base_robot_backup)
+    print(f"✅ Backed up base configs to {log_pth}")
+
     if args.debug:
         mode = "disabled"
         args.rows = 10
@@ -59,6 +85,11 @@ def train(args):
     wandb.init(project=args.proj_name, name=args.exptid,  group=args.exptid[:3], mode=mode, dir="../../logs")
     wandb.save(LEGGED_GYM_ENVS_DIR + "/base/legged_robot_config.py", policy="now")
     wandb.save(LEGGED_GYM_ENVS_DIR + "/base/legged_robot.py", policy="now")
+
+    # 上传任务配置
+    if os.path.exists(task_config_path):
+        wandb.save(task_config_path, policy="now")
+        print(f"✅ Uploaded {args.task}_config.py to WandB")
 
     env, env_cfg = task_registry.make_env(name=args.task, args=args)
     ppo_runner, train_cfg = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args)
