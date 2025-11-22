@@ -172,51 +172,52 @@ class LeggedRobot(BaseTask):
          
         depth_image += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]
         
-        # 添加随机像素点缺失(设为无穷大)
-        if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
-            # 生成随机mask,决定哪些像素点缺失
-            dropout_mask = torch.rand_like(depth_image) < self.cfg.depth.dropout_prob
-            depth_image[dropout_mask] = float('-inf')  # 设为负无穷(因为深度值是负的)
-        
-        # 添加椒盐噪声
-        if hasattr(self.cfg.depth, 'salt_pepper_prob') and self.cfg.depth.salt_pepper_prob > 0:
-            # 盐噪声(设为远端clip值)
-            salt_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
-            depth_image[salt_mask] = -self.cfg.depth.far_clip
+        if getattr(self.cfg.depth, 'enable_noise', True):  # 默认启用噪声
+            # 添加随机像素点缺失(设为无穷大)
+            if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
+                # 生成随机mask,决定哪些像素点缺失
+                dropout_mask = torch.rand_like(depth_image) < self.cfg.depth.dropout_prob
+                depth_image[dropout_mask] = float('-inf')  # 设为负无穷(因为深度值是负的)
             
-            # 椒噪声(设为近端clip值)
-            pepper_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
-            depth_image[pepper_mask] = -self.cfg.depth.near_clip
-        
-        if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
-            # 深度值是负数，取绝对值得到实际距离
-            distance = torch.abs(depth_image)  # [H, W]
+            # 添加椒盐噪声
+            if hasattr(self.cfg.depth, 'salt_pepper_prob') and self.cfg.depth.salt_pepper_prob > 0:
+                # 盐噪声(设为远端clip值)
+                salt_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+                depth_image[salt_mask] = -self.cfg.depth.far_clip
+                
+                # 椒噪声(设为近端clip值)
+                pepper_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+                depth_image[pepper_mask] = -self.cfg.depth.near_clip
+            
+            if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
+                # 深度值是负数，取绝对值得到实际距离
+                distance = torch.abs(depth_image)  # [H, W]
 
-            # 🔥 只对 3m 以内的距离施加噪声
-            valid_mask = distance <= 3.0  # [H, W] 布尔掩码
-            
-            # 🔥 噪声模型：σ(d) = base_std * (1 + distance_factor * d)
-            # 基础噪声：2% 误差
-            base_std = self.cfg.depth.gaussian_noise_std
-            
-            # 距离系数：控制噪声随距离增长的速度
-            # distance_factor = 0.5 表示每增加 1m，噪声增加 50%
-            distance_factor = getattr(self.cfg.depth, 'gaussian_noise_distance_factor', 0.5)
-            
-            # 计算每个像素的自适应标准差
-            # 例如: d=0.5m -> σ=0.02*(1+0.5*0.5)=0.025 (2.5%误差)
-            #      d=1.0m -> σ=0.02*(1+0.5*1.0)=0.03  (3%误差)
-            #      d=2.0m -> σ=0.02*(1+0.5*2.0)=0.04  (4%误差)
-            adaptive_std = base_std * (1.0 + distance_factor * distance)
-            
-            # 生成自适应高斯噪声
-            gaussian_noise = torch.randn_like(depth_image) * adaptive_std
-            
-            # 🔥 只在有效区域添加噪声
-            gaussian_noise[~valid_mask] = 0.0  # 3m 外的噪声设为 0
+                # 🔥 只对 3m 以内的距离施加噪声
+                valid_mask = distance <= 3.0  # [H, W] 布尔掩码
+                
+                # 🔥 噪声模型：σ(d) = base_std * (1 + distance_factor * d)
+                # 基础噪声：2% 误差
+                base_std = self.cfg.depth.gaussian_noise_std
+                
+                # 距离系数：控制噪声随距离增长的速度
+                # distance_factor = 0.5 表示每增加 1m，噪声增加 50%
+                distance_factor = getattr(self.cfg.depth, 'gaussian_noise_distance_factor', 0.5)
+                
+                # 计算每个像素的自适应标准差
+                # 例如: d=0.5m -> σ=0.02*(1+0.5*0.5)=0.025 (2.5%误差)
+                #      d=1.0m -> σ=0.02*(1+0.5*1.0)=0.03  (3%误差)
+                #      d=2.0m -> σ=0.02*(1+0.5*2.0)=0.04  (4%误差)
+                adaptive_std = base_std * (1.0 + distance_factor * distance)
+                
+                # 生成自适应高斯噪声
+                gaussian_noise = torch.randn_like(depth_image) * adaptive_std
+                
+                # 🔥 只在有效区域添加噪声
+                gaussian_noise[~valid_mask] = 0.0  # 3m 外的噪声设为 0
 
-            # 添加噪声（注意深度是负值，所以直接加）
-            depth_image += gaussian_noise
+                # 添加噪声（注意深度是负值，所以直接加）
+                depth_image += gaussian_noise
 
 
         depth_image = torch.clip(depth_image, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
@@ -943,9 +944,12 @@ class LeggedRobot(BaseTask):
             camera_position_center = np.copy(config.position)
             camera_position = np.random.uniform(camera_position_center-config.position_rand, camera_position_center+config.position_rand)
             camera_angle = np.random.uniform(config.angle[0], config.angle[1])
-            
+
+            camera_z_angle = np.random.uniform(config.z_angle[0], config.z_angle[1])
+            camera_x_angle = np.random.uniform(config.x_angle[0], config.x_angle[1])
+
             local_transform.p = gymapi.Vec3(*camera_position)
-            local_transform.r = gymapi.Quat.from_euler_zyx(0, np.radians(camera_angle), 0)
+            local_transform.r = gymapi.Quat.from_euler_zyx(np.radians(camera_x_angle), np.radians(camera_angle), np.radians(camera_z_angle))
             root_handle = self.gym.get_actor_root_rigid_body_handle(env_handle, actor_handle)
             
             self.gym.attach_camera_to_body(camera_handle, env_handle, root_handle, local_transform, gymapi.FOLLOW_TRANSFORM)

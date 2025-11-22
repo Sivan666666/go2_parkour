@@ -110,7 +110,8 @@ class Go2RoughCfg( LeggedRobotCfg ):
         position = [0.3, 0, 0.147]  # front camera
         position_rand = 0.01  
         angle = [29-5, 29+5]  # positive pitch down  #27-5,27+5
-
+        z_angle = [-2, 2]
+        x_angle = [-2, 2]
         # our designed position
         # position = [0.3, 0, 0.188]  # front camera
         # position_rand = 0.01  
@@ -125,14 +126,16 @@ class Go2RoughCfg( LeggedRobotCfg ):
         
         near_clip = 0.2
         far_clip = 2
-        dis_noise = 0.1
+        # 噪声总开关
+        enable_noise = True
+        dis_noise = 0.0
 
         # 新增噪声参数
-        dropout_prob = 0.01  # 1%的像素点缺失概率
-        salt_pepper_prob = 0.005 # 0.5%的椒盐噪声概率
+        dropout_prob = 0.005  # 0.5%的像素点缺失概率
+        salt_pepper_prob = 0.0  # 0.05%的椒盐噪声概率
 
         # 🔥 距离相关高斯噪声
-        gaussian_noise_std = 0.04  # 基础噪声标准差（4% 误差 @ 近距离）
+        gaussian_noise_std = 0.08  # 基础噪声标准差（8% 误差 @ 近距离）
 
         # 噪声随距离增长系数（默认 0.5）
         # 公式: σ(d) = gaussian_noise_std * (1 + distance_factor * d)
