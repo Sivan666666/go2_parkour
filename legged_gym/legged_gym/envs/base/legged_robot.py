@@ -75,6 +75,81 @@ def euler_from_quaternion(quat_angle):
      
         return roll_x, pitch_y, yaw_z # in radians
 
+class PerlinNoise:
+    """简化的柏林噪声生成器"""
+    def __init__(self, scale=10.0, octaves=2):
+        self.scale = scale
+        self.octaves = octaves
+        self.time_offset = 0.0
+    
+    def generate(self, shape, time_offset=0.0):
+        """生成2D柏林噪声
+        Args:
+            shape: (height, width)
+            time_offset: 时间偏移,用于生成连续的噪声
+        Returns:
+            noise: shape的噪声图,值范围[0, 1]
+        """
+        h, w = shape
+        noise = np.zeros((h, w))
+        
+        # 使用多个八度叠加
+        amplitude = 1.0
+        frequency = 1.0
+        
+        for _ in range(self.octaves):
+            # 生成随机梯度网格
+            grid_h = int(h / self.scale / frequency) + 2
+            grid_w = int(w / self.scale / frequency) + 2
+            
+            # 使用时间偏移作为随机种子
+            np.random.seed(int(time_offset * 1000) % 2**31)
+            gradients = np.random.randn(grid_h, grid_w, 2)
+            
+            # 插值生成噪声
+            for i in range(h):
+                for j in range(w):
+                    # 网格坐标
+                    x = i / self.scale / frequency
+                    y = j / self.scale / frequency
+                    
+                    # 四个角点
+                    x0, y0 = int(x), int(y)
+                    x1, y1 = x0 + 1, y0 + 1
+                    
+                    # 双线性插值
+                    sx = x - x0
+                    sy = y - y0
+                    
+                    n00 = self._dot_grid_gradient(gradients, x0, y0, x, y)
+                    n10 = self._dot_grid_gradient(gradients, x1, y0, x, y)
+                    n01 = self._dot_grid_gradient(gradients, x0, y1, x, y)
+                    n11 = self._dot_grid_gradient(gradients, x1, y1, x, y)
+                    
+                    nx0 = self._lerp(n00, n10, sx)
+                    nx1 = self._lerp(n01, n11, sx)
+                    value = self._lerp(nx0, nx1, sy)
+                    
+                    noise[i, j] += value * amplitude
+            
+            amplitude *= 0.5
+            frequency *= 2.0
+        
+        # 归一化到[0, 1]
+        noise = (noise - noise.min()) / (noise.max() - noise.min() + 1e-8)
+        return noise
+    
+    def _dot_grid_gradient(self, gradients, ix, iy, x, y):
+        """计算梯度向量点积"""
+        dx = x - ix
+        dy = y - iy
+        if ix >= gradients.shape[0] or iy >= gradients.shape[1]:
+            return 0
+        return gradients[ix, iy, 0] * dx + gradients[ix, iy, 1] * dy
+    
+    def _lerp(self, a, b, t):
+        """线性插值"""
+        return a + t * (b - a)
 class LeggedRobot(BaseTask):
     def __init__(self, cfg: LeggedRobotCfg, sim_params, physics_engine, sim_device, headless):
         """ Parses the provided config file,
@@ -95,6 +170,44 @@ class LeggedRobot(BaseTask):
         self.debug_viz = True
         self.init_done = False
         self._parse_cfg(self.cfg)
+
+        # 🔥 初始化柏林噪声生成器
+        self.perlin_time_offset = 0.0
+        if self.cfg.depth.use_camera:
+            self.perlin_noise_generator = PerlinNoise(
+                scale=self.cfg.depth.perlin_noise_scale,
+                octaves=self.cfg.depth.perlin_noise_octaves
+            )
+            self.perlin_time_offset = 0.0
+
+            # 每个环境独立的时间偏移
+            self.perlin_time_offsets = torch.zeros(self.cfg.env.num_envs, device=sim_device)
+            # 给每个环境不同的初始相位
+            self.perlin_time_offsets = torch.rand(self.cfg.env.num_envs, device=sim_device) * 100
+            
+            # 🔥 新增: 为每个环境分配固定的噪声启用标志
+            # 边缘噪声标志: True=该环境有边缘噪声, False=没有
+            edge_enable_prob = getattr(self.cfg.depth, 'edge_noise_enable_prob', 1.0)
+            self.env_has_edge_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < edge_enable_prob
+            
+            # 柏林噪声标志
+            perlin_enable_prob = getattr(self.cfg.depth, 'perlin_noise_enable_prob', 1.0)
+            self.env_has_perlin_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < perlin_enable_prob
+            
+            # 高斯噪声标志
+            gaussian_enable_prob = getattr(self.cfg.depth, 'gaussian_noise_enable_prob', 1.0)
+            self.env_has_gaussian_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < gaussian_enable_prob
+            
+            # 打印统计信息
+            print("="*60)
+            print("📊 深度噪声分配统计:")
+            print(f"  - 边缘噪声: {self.env_has_edge_noise.sum().item()}/{self.cfg.env.num_envs} 环境 ({edge_enable_prob*100:.0f}%)")
+            print(f"  - 柏林噪声: {self.env_has_perlin_noise.sum().item()}/{self.cfg.env.num_envs} 环境 ({perlin_enable_prob*100:.0f}%)")
+            print(f"  - 高斯噪声: {self.env_has_gaussian_noise.sum().item()}/{self.cfg.env.num_envs} 环境 ({gaussian_enable_prob*100:.0f}%)")
+            print("="*60)
+            
+            print("✅ Perlin noise generator initialized")
+
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
 
         self.resize_transform = torchvision.transforms.Resize((self.cfg.depth.resized[1], self.cfg.depth.resized[0]), 
@@ -110,6 +223,8 @@ class LeggedRobot(BaseTask):
 
         self.reset_idx(torch.arange(self.num_envs, device=self.device))
         self.post_physics_step()
+
+
 
     def step(self, actions):
         """ Apply actions, simulate, call self.post_physics_step()
@@ -218,6 +333,118 @@ class LeggedRobot(BaseTask):
 
                 # 添加噪声（注意深度是负值，所以直接加）
                 depth_image += gaussian_noise
+
+        # if getattr(self.cfg.depth, 'enable_noise', True):
+            
+        #     # ==========================================
+        #     # 🔥 5. Gaussian noise: 高斯噪声 (按环境启用)
+        #     # ==========================================
+        #     if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
+        #         # 🔥 检查当前环境是否有高斯噪声
+        #         if self.env_has_gaussian_noise[env_id]:
+        #             distance = torch.abs(depth_image)
+        #             valid_mask = distance <= 3.0
+                    
+        #             base_std = self.cfg.depth.gaussian_noise_std
+        #             distance_factor = getattr(self.cfg.depth, 'gaussian_noise_distance_factor', 0.5)
+        #             adaptive_std = base_std * (1.0 + distance_factor * distance)
+                    
+        #             gaussian_noise = torch.randn_like(depth_image) * adaptive_std
+        #             gaussian_noise[~valid_mask] = 0.0
+        #             depth_image += gaussian_noise
+
+        #     # ==========================================
+        #     # 🔥 1. Clip: 0.2m以内设为无穷大
+        #     # ==========================================
+        #     distance = torch.abs(depth_image)
+        #     near_mask = distance < self.cfg.depth.clip_near_distance
+        #     depth_image[near_mask] = -self.cfg.depth.far_clip  # 设为最远距离(无穷)
+            
+        #     # ==========================================
+        #     # 🔥 2. Edge noise: 边缘噪声 (按环境启用)
+        #     # ==========================================
+        #     if hasattr(self.cfg.depth, 'edge_noise_prob') and self.cfg.depth.edge_noise_prob > 0:
+        #         # 🔥 检查当前环境是否有边缘噪声
+        #         if self.env_has_edge_noise[env_id]:
+        #             # 计算深度梯度
+        #             depth_np = depth_image.cpu().numpy()
+        #             grad_x = np.abs(np.gradient(depth_np, axis=1))
+        #             grad_y = np.abs(np.gradient(depth_np, axis=0))
+        #             gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+                    
+        #             # 识别边缘
+        #             edge_mask = gradient_magnitude > self.cfg.depth.edge_gradient_threshold
+                    
+        #             # 膨胀边缘
+        #             if self.cfg.depth.edge_dilation_kernel_size > 0:
+        #                 import cv2
+        #                 kernel = np.ones((self.cfg.depth.edge_dilation_kernel_size, 
+        #                                  self.cfg.depth.edge_dilation_kernel_size), np.uint8)
+        #                 edge_mask = cv2.dilate(edge_mask.astype(np.uint8), kernel, iterations=1).astype(bool)
+                    
+        #             # 在边缘处随机设为无穷
+        #             edge_tensor = torch.from_numpy(edge_mask).to(self.device)
+        #             random_mask = torch.rand_like(depth_image) < self.cfg.depth.edge_noise_prob
+        #             edge_noise_mask = edge_tensor & random_mask
+        #             depth_image[edge_noise_mask] = -self.cfg.depth.far_clip
+            
+        #     # ==========================================
+        #     # 🔥 3. Holes: 柏林噪声模拟空洞 (按环境启用)
+        #     # ==========================================
+        #     if hasattr(self.cfg.depth, 'perlin_noise_threshold'):
+        #         # 🔥 检查当前环境是否有柏林噪声
+        #         if self.env_has_perlin_noise[env_id]:
+        #             # 只更新当前环境的时间偏移
+        #             self.perlin_time_offsets[env_id] += self.cfg.depth.perlin_noise_evolution_speed
+                    
+        #             # 使用当前环境的时间偏移
+        #             perlin_noise = self.perlin_noise_generator.generate(
+        #                 depth_image.shape, 
+        #                 time_offset=self.perlin_time_offsets[env_id].item()
+        #             )
+        #             perlin_tensor = torch.from_numpy(perlin_noise).to(self.device).float()
+                    
+        #             hole_mask = perlin_tensor > self.cfg.depth.perlin_noise_threshold
+        #             depth_image[hole_mask] = -self.cfg.depth.far_clip
+            
+        #     # ==========================================
+        #     # 🔥 4. Blind spot: 去除左侧5列 (所有环境都有)
+        #     # ==========================================
+        #     if hasattr(self.cfg.depth, 'blind_spot_left_columns') and self.cfg.depth.blind_spot_left_columns > 0:
+        #         depth_image[:, :self.cfg.depth.blind_spot_left_columns] = -self.cfg.depth.far_clip
+            
+
+            
+        #     # ==========================================
+        #     # 原有噪声: dropout, salt_pepper
+        #     # ==========================================
+        #     if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
+        #         dropout_mask = torch.rand_like(depth_image) < self.cfg.depth.dropout_prob
+        #         depth_image[dropout_mask] = -self.cfg.depth.far_clip
+            
+        #     if hasattr(self.cfg.depth, 'salt_pepper_prob') and self.cfg.depth.salt_pepper_prob > 0:
+        #         salt_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+        #         depth_image[salt_mask] = -self.cfg.depth.far_clip
+                
+        #         pepper_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+        #         depth_image[pepper_mask] = -self.cfg.depth.near_clip
+
+        #     # ==========================================
+        #     # 🔥 6. Gaussian Blur: 平滑整个图像 (最后一步!)
+        #     # ==========================================
+        #     if getattr(self.cfg.depth, 'apply_gaussian_blur', False):
+        #         import cv2
+        #         kernel_size = getattr(self.cfg.depth, 'gaussian_blur_kernel_size', 5)
+        #         sigma = getattr(self.cfg.depth, 'gaussian_blur_sigma', 1.0)
+                
+        #         # 转换到 numpy 进行高斯模糊
+        #         depth_np = depth_image.cpu().numpy()
+        #         depth_blurred = cv2.GaussianBlur(
+        #             depth_np, 
+        #             (kernel_size, kernel_size),  # 核大小
+        #             sigma  # 标准差
+        #         )
+        #         depth_image = torch.from_numpy(depth_blurred).to(self.device).float()
 
 
         depth_image = torch.clip(depth_image, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
@@ -332,11 +559,13 @@ class LeggedRobot(BaseTask):
                 window_name = "Depth Image"
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-                scale_factor = 4
+                scale_factor = 10
                 depth_image = self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5
                 height, width = depth_image.shape[:2]
                 new_height = int(height * scale_factor)
                 new_width = int(width * scale_factor)
+                print(new_height, new_width)
+
                 resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
 
                 cv2.imshow(window_name, resized_depth_image)
@@ -933,7 +1162,19 @@ class LeggedRobot(BaseTask):
             camera_props.width = self.cfg.depth.original[0]
             camera_props.height = self.cfg.depth.original[1]
             camera_props.enable_tensors = True
-            camera_horizontal_fov = self.cfg.depth.horizontal_fov 
+
+            #camera_horizontal_fov = self.cfg.depth.horizontal_fov 
+            # camera_horizontal_fov = 87.5
+            #  Horizontal FOV 域随机化
+            # Horizontal FOV 域随机化 (从离散值中选择)
+            if hasattr(self.cfg.depth, 'horizontal_fov_range'):
+                # 🔥 从离散的候选值中随机选择一个
+                fov_candidates = self.cfg.depth.horizontal_fov_range
+                camera_horizontal_fov = np.random.choice(fov_candidates)
+            else:
+                # 使用固定值
+                camera_horizontal_fov = self.cfg.depth.horizontal_fov
+
             camera_props.horizontal_fov = camera_horizontal_fov
 
             camera_handle = self.gym.create_camera_sensor(env_handle, camera_props)

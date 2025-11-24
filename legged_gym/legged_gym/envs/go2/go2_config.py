@@ -108,7 +108,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         # # helpful doggy
         position = [0.3, 0, 0.147]  # front camera
-        position_rand = 0.01  
+        position_rand = 0.02  
         angle = [29-5, 29+5]  # positive pitch down  #27-5,27+5
         z_angle = [-2, 2]
         x_angle = [-2, 2]
@@ -121,27 +121,52 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         original = (106, 60)
         resized = (87, 58)
-        horizontal_fov = 87
+        # 🔥 Horizontal FOV 域随机化
+        horizontal_fov = 87  # 基准值
+        horizontal_fov_range = [86, 87, 88]   # 随机范围 86-88 度
+
         buffer_len = 2
         
-        near_clip = 0.2
+        # Clip 参数
+        near_clip = 0.15
         far_clip = 2
+
         # 噪声总开关
         enable_noise = True
         dis_noise = 0.0
 
-        # 新增噪声参数
-        dropout_prob = 0.005  # 0.5%的像素点缺失概率
-        salt_pepper_prob = 0.0  # 0.05%的椒盐噪声概率
+        # 1. Clip: 近距离设为无穷
+        clip_near_distance = 0.15  # 0.15m以内设为无穷大
 
-        # 🔥 距离相关高斯噪声
-        gaussian_noise_std = 0.08  # 基础噪声标准差（8% 误差 @ 近距离）
+        # 2. Edge noise: 边缘噪声
+        edge_noise_enable_prob = 0.8  # 🆕 100%概率启用边缘噪声
+        edge_noise_prob = 0.3  # 边缘处30%概率设为无穷
+        edge_gradient_threshold = 0.3  # 深度梯度阈值(米)
+        edge_dilation_kernel_size = 3  # 边缘膨胀核大小
 
-        # 噪声随距离增长系数（默认 0.5）
-        # 公式: σ(d) = gaussian_noise_std * (1 + distance_factor * d)
-        # 例如: d=1m -> σ=0.04*(1+0.5*1)=0.06 (6%误差)
-        #      d=2m -> σ=0.04*(1+0.5*2)=0.08 (8%误差)
+        # 3. Holes: 柏林噪声模拟空洞
+        perlin_noise_enable_prob = 0.8  # 🆕 80%概率启用柏林噪声
+        perlin_noise_threshold = 0.8  # 大于此阈值的区域设为空洞
+        perlin_noise_scale = 10.0  # 柏林噪声频率
+        perlin_noise_octaves = 2  # 柏林噪声叠加层数
+        perlin_noise_evolution_speed = 0.005  # 时间演化速度
+
+        # 4. Blind spot: 去除左侧列
+        blind_spot_left_columns = 5  # 去除左侧5列
+
+        # 5. Gaussian noise: 高斯噪声
+        gaussian_noise_enable_prob = 0.8  # 🆕 80%概率启用高斯噪声
+        gaussian_noise_std = 0.04
         gaussian_noise_distance_factor = 0.5
+
+        # 6. Gaussian Blur: 最终平滑 (新增)
+        apply_gaussian_blur = True  # 是否应用高斯模糊
+        gaussian_blur_kernel_size = 5  # 核大小(必须是奇数: 3, 5, 7...)
+        gaussian_blur_sigma = 2.0  # 标准差(越大越模糊)
+
+        # 原有噪声
+        dropout_prob = 0.001
+        salt_pepper_prob = 0.0
 
 
         scale = 1
