@@ -546,6 +546,12 @@ class DepthOnlyFCBackbone58x87_Original(nn.Module):
 
         return latent
 
-# 使用别名保持兼容性
-RecurrentDepthBackbone = RecurrentDepthBackbone_Attention 
-DepthOnlyFCBackbone58x87 = DepthResNetBackbone
+# # 使用别名保持兼容性
+RecurrentDepthBackbone = RecurrentDepthBackbone_GRU
+DepthOnlyFCBackbone58x87 = DepthTransformerBackbone
+
+# RecurrentDepthBackbone = RecurrentDepthBackbone_Attention
+# DepthOnlyFCBackbone58x87 = DepthResNetBackbone
+
+# RecurrentDepthBackbone = RecurrentDepthBackbone_Original
+# DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original
