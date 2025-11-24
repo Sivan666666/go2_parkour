@@ -203,10 +203,10 @@ class LeggedRobotCfg(BaseConfig):
                         "platform": 0.,
                         "large stairs up": 0.,
                         "large stairs down": 0.,
-                        "parkour": 0.2,
-                        "parkour_hurdle": 0.2,
+                        "parkour": 0.0,
+                        "parkour_hurdle": 0.3,
                         "parkour_flat": 0.2,
-                        "parkour_step": 0.2,
+                        "parkour_step": 0.3,
                         "parkour_gap": 0.2,
                         "demo": 0.0,}
         
