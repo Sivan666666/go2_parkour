@@ -150,6 +150,421 @@ class PerlinNoise:
     def _lerp(self, a, b, t):
         """线性插值"""
         return a + t * (b - a)
+
+# class PerlinNoiseGPU:
+#     """GPU 加速的柏林噪声生成器 (向量化八度循环)"""
+#     def __init__(self, scale=10.0, octaves=2, device='cuda'):
+#         self.scale = scale
+#         self.octaves = octaves
+#         self.device = device
+        
+#         # 🔥 预计算所有八度的频率和振幅 (避免循环中重复计算)
+#         self.frequencies = torch.tensor(
+#             [2.0**i for i in range(octaves)],
+#             device=device,
+#             dtype=torch.float32
+#         )
+#         self.amplitudes = torch.tensor(
+#             [0.5**i for i in range(octaves)],
+#             device=device,
+#             dtype=torch.float32
+#         )
+        
+#     def generate(self, shape, time_offset=0.0):
+#         """生成2D柏林噪声 (批量处理所有八度)
+#         Args:
+#             shape: (height, width)
+#             time_offset: 时间偏移,用于生成连续的噪声
+#         Returns:
+#             noise: shape 的噪声图 Tensor,值范围[0, 1]
+#         """
+#         h, w = shape
+        
+#         # 🔥 批量生成所有八度的噪声 (替代 for 循环)
+#         # 为所有八度创建统一的坐标网格
+#         octave_noise = torch.zeros(self.octaves, h, w, device=self.device)
+        
+#         for octave in range(self.octaves):
+#             frequency = self.frequencies[octave]
+#             amplitude = self.amplitudes[octave]
+            
+#             # 生成梯度网格
+#             grid_h = int(h / self.scale / frequency) + 2
+#             grid_w = int(w / self.scale / frequency) + 2
+            
+#             # 使用时间偏移作为随机种子
+#             torch.manual_seed(int((time_offset + octave) * 1000) % 2**31)
+#             gradients = torch.randn(grid_h, grid_w, 2, device=self.device)
+            
+#             # 🔥 坐标网格 (复用同一份内存)
+#             y_grid = (torch.arange(h, device=self.device).float().unsqueeze(1) / self.scale / frequency).expand(h, w)
+#             x_grid = (torch.arange(w, device=self.device).float().unsqueeze(0) / self.scale / frequency).expand(h, w)
+            
+#             # 四个角点坐标
+#             x0 = torch.clamp(torch.floor(x_grid).long(), 0, grid_w - 1)
+#             y0 = torch.clamp(torch.floor(y_grid).long(), 0, grid_h - 1)
+#             x1 = torch.clamp(x0 + 1, 0, grid_w - 1)
+#             y1 = torch.clamp(y0 + 1, 0, grid_h - 1)
+            
+#             # 插值系数
+#             sx = x_grid - x0.float()
+#             sy = y_grid - y0.float()
+            
+#             # 🔥 梯度点积 (向量化,避免重复计算)
+#             # 预计算向量距离
+#             dx0 = sx
+#             dy0 = sy
+#             dx1 = sx - 1.0
+#             dy1 = sy - 1.0
+            
+#             # 四个角点的梯度
+#             g00 = gradients[y0, x0]  # [h, w, 2]
+#             g10 = gradients[y0, x1]
+#             g01 = gradients[y1, x0]
+#             g11 = gradients[y1, x1]
+            
+#             # 点积 (向量化)
+#             n00 = g00[..., 0] * dx0 + g00[..., 1] * dy0
+#             n10 = g10[..., 0] * dx1 + g10[..., 1] * dy0
+#             n01 = g01[..., 0] * dx0 + g01[..., 1] * dy1
+#             n11 = g11[..., 0] * dx1 + g11[..., 1] * dy1
+            
+#             # 双线性插值 (直接展开,避免函数调用)
+#             nx0 = n00 + sx * (n10 - n00)
+#             nx1 = n01 + sx * (n11 - n01)
+#             value = nx0 + sy * (nx1 - nx0)
+            
+#             octave_noise[octave] = value * amplitude
+        
+#         # 🔥 所有八度求和 (GPU 并行)
+#         noise = octave_noise.sum(dim=0)
+        
+#         # 归一化到 [0, 1]
+#         noise = (noise - noise.min()) / (noise.max() - noise.min() + 1e-8)
+#         return noise
+
+class PerlinNoiseGPU:
+    """GPU 加速的柏林噪声生成器 (带性能分析)"""
+    def __init__(self, scale=10.0, octaves=2, device='cuda'):
+        self.scale = scale
+        self.octaves = octaves
+        self.device = device
+        
+        # 预计算所有八度的频率和振幅
+        self.frequencies = torch.tensor(
+            [2.0**i for i in range(octaves)],
+            device=device,
+            dtype=torch.float32
+        )
+        self.amplitudes = torch.tensor(
+            [0.5**i for i in range(octaves)],
+            device=device,
+            dtype=torch.float32
+        )
+        
+        # 🔥 性能统计
+        self._timing_counter = 0
+        self._timing_accumulator = {}
+        
+    def generate(self, shape, time_offset=0.0):
+        """生成2D柏林噪声 (带详细性能分析)"""
+        import time
+        
+        total_start = time.time()
+        timings = {}
+        
+        h, w = shape
+        octave_noise = torch.zeros(self.octaves, h, w, device=self.device)
+        
+        # 🔥 分八度统计
+        octave_timings = []
+        
+        for octave in range(self.octaves):
+            octave_start = time.time()
+            octave_timing = {}
+            
+            frequency = self.frequencies[octave]
+            amplitude = self.amplitudes[octave]
+            
+            # 1️⃣ 生成梯度网格
+            t0 = time.time()
+            grid_h = int(h / self.scale / frequency) + 2
+            grid_w = int(w / self.scale / frequency) + 2
+            torch.manual_seed(int((time_offset + octave) * 1000) % 2**31)
+            gradients = torch.randn(grid_h, grid_w, 2, device=self.device)
+            octave_timing['1_gradient_gen'] = (time.time() - t0) * 1000
+            
+            # 2️⃣ 生成坐标网格
+            t0 = time.time()
+            y_grid = (torch.arange(h, device=self.device).float().unsqueeze(1) / self.scale / frequency).expand(h, w)
+            x_grid = (torch.arange(w, device=self.device).float().unsqueeze(0) / self.scale / frequency).expand(h, w)
+            octave_timing['2_coord_grid'] = (time.time() - t0) * 1000
+            
+            # 3️⃣ 计算四个角点坐标
+            t0 = time.time()
+            x0 = torch.clamp(torch.floor(x_grid).long(), 0, grid_w - 1)
+            y0 = torch.clamp(torch.floor(y_grid).long(), 0, grid_h - 1)
+            x1 = torch.clamp(x0 + 1, 0, grid_w - 1)
+            y1 = torch.clamp(y0 + 1, 0, grid_h - 1)
+            octave_timing['3_corner_coords'] = (time.time() - t0) * 1000
+            
+            # 4️⃣ 计算插值系数
+            t0 = time.time()
+            sx = x_grid - x0.float()
+            sy = y_grid - y0.float()
+            octave_timing['4_interp_coeff'] = (time.time() - t0) * 1000
+            
+            # 5️⃣ 预计算向量距离
+            t0 = time.time()
+            dx0 = sx
+            dy0 = sy
+            dx1 = sx - 1.0
+            dy1 = sy - 1.0
+            octave_timing['5_vector_dist'] = (time.time() - t0) * 1000
+            
+            # 6️⃣ 获取四个角点的梯度
+            t0 = time.time()
+            g00 = gradients[y0, x0]
+            g10 = gradients[y0, x1]
+            g01 = gradients[y1, x0]
+            g11 = gradients[y1, x1]
+            octave_timing['6_gradient_fetch'] = (time.time() - t0) * 1000
+            
+            # 7️⃣ 梯度点积
+            t0 = time.time()
+            n00 = g00[..., 0] * dx0 + g00[..., 1] * dy0
+            n10 = g10[..., 0] * dx1 + g10[..., 1] * dy0
+            n01 = g01[..., 0] * dx0 + g01[..., 1] * dy1
+            n11 = g11[..., 0] * dx1 + g11[..., 1] * dy1
+            octave_timing['7_dot_product'] = (time.time() - t0) * 1000
+            
+            # 8️⃣ 双线性插值
+            t0 = time.time()
+            nx0 = n00 + sx * (n10 - n00)
+            nx1 = n01 + sx * (n11 - n01)
+            value = nx0 + sy * (nx1 - nx0)
+            octave_timing['8_bilinear_interp'] = (time.time() - t0) * 1000
+            
+            # 9️⃣ 乘以振幅并存储
+            t0 = time.time()
+            octave_noise[octave] = value * amplitude
+            octave_timing['9_amplitude_scale'] = (time.time() - t0) * 1000
+            
+            octave_timing['OCTAVE_TOTAL'] = (time.time() - octave_start) * 1000
+            octave_timings.append(octave_timing)
+        
+        # 🔟 所有八度求和
+        t0 = time.time()
+        noise = octave_noise.sum(dim=0)
+        timings['10_octave_sum'] = (time.time() - t0) * 1000
+        
+        # 1️⃣1️⃣ 归一化
+        t0 = time.time()
+        noise = (noise - noise.min()) / (noise.max() - noise.min() + 1e-8)
+        timings['11_normalize'] = (time.time() - t0) * 1000
+        
+        timings['TOTAL'] = (time.time() - total_start) * 1000
+        
+        # 🔥 累积统计
+        self._accumulate_timings(timings, octave_timings)
+        self._timing_counter += 1
+        
+        # 每 100 次打印一次
+        if self._timing_counter % 100 == 0:
+            self._print_statistics()
+        
+        return noise
+    
+    def _accumulate_timings(self, timings, octave_timings):
+        """累积时间统计"""
+        # 累积总体时间
+        for key, value in timings.items():
+            if key not in self._timing_accumulator:
+                self._timing_accumulator[key] = 0.0
+            self._timing_accumulator[key] += value
+        
+        # 累积每个八度的时间 (取平均)
+        for octave_idx, octave_timing in enumerate(octave_timings):
+            for key, value in octave_timing.items():
+                avg_key = f'octave_avg_{key}'
+                if avg_key not in self._timing_accumulator:
+                    self._timing_accumulator[avg_key] = 0.0
+                self._timing_accumulator[avg_key] += value / len(octave_timings)
+    
+    def _print_statistics(self):
+        """打印性能统计"""
+        print("\n" + "="*90)
+        print(f"🔥 柏林噪声生成器性能分析 (平均值, 基于 {self._timing_counter} 次调用)")
+        print("="*90)
+        
+        # 打印每个八度的平均耗时
+        print("\n📊 单个八度的详细耗时:")
+        print("-"*90)
+        
+        octave_keys = [
+            ('1_gradient_gen', '梯度网格生成'),
+            ('2_coord_grid', '坐标网格生成'),
+            ('3_corner_coords', '角点坐标计算'),
+            ('4_interp_coeff', '插值系数计算'),
+            ('5_vector_dist', '向量距离计算'),
+            ('6_gradient_fetch', '梯度索引获取'),
+            ('7_dot_product', '梯度点积计算'),
+            ('8_bilinear_interp', '双线性插值'),
+            ('9_amplitude_scale', '振幅缩放'),
+            ('OCTAVE_TOTAL', '✅ 单八度总计'),
+        ]
+        
+        octave_total = self._timing_accumulator.get('octave_avg_OCTAVE_TOTAL', 0) / self._timing_counter
+        
+        for key, desc in octave_keys:
+            avg_key = f'octave_avg_{key}'
+            if avg_key in self._timing_accumulator:
+                avg_time = self._timing_accumulator[avg_key] / self._timing_counter
+                if key == 'OCTAVE_TOTAL':
+                    print("-"*90)
+                    print(f"  {desc:.<50} {avg_time:>10.4f} ms")
+                else:
+                    percentage = (avg_time / octave_total * 100) if octave_total > 0 else 0
+                    print(f"  {desc:.<50} {avg_time:>10.4f} ms  ({percentage:>5.1f}%)")
+        
+        # 打印总体耗时
+        print("\n📊 总体耗时:")
+        print("-"*90)
+        
+        total_keys = [
+            ('10_octave_sum', '所有八度求和'),
+            ('11_normalize', '归一化处理'),
+            ('TOTAL', '⏱️  总计'),
+        ]
+        
+        total_time = self._timing_accumulator.get('TOTAL', 0) / self._timing_counter
+        
+        for key, desc in total_keys:
+            if key in self._timing_accumulator:
+                avg_time = self._timing_accumulator[key] / self._timing_counter
+                if key == 'TOTAL':
+                    print("-"*90)
+                    print(f"  {desc:.<50} {avg_time:>10.4f} ms")
+                else:
+                    percentage = (avg_time / total_time * 100) if total_time > 0 else 0
+                    print(f"  {desc:.<50} {avg_time:>10.4f} ms  ({percentage:>5.1f}%)")
+        
+        # 八度数统计
+        all_octaves_time = octave_total * self.octaves
+        octave_overhead = total_time - all_octaves_time
+        
+        print("\n📊 八度统计:")
+        print("-"*90)
+        print(f"  {'八度数量':.<50} {self.octaves:>10d}")
+        print(f"  {'单八度平均耗时':.<50} {octave_total:>10.4f} ms")
+        print(f"  {'所有八度总耗时':.<50} {all_octaves_time:>10.4f} ms  ({all_octaves_time/total_time*100:>5.1f}%)")
+        print(f"  {'其他开销(求和+归一化)':.<50} {octave_overhead:>10.4f} ms  ({octave_overhead/total_time*100:>5.1f}%)")
+        
+        print("="*90 + "\n")
+        
+        # 重置计数器
+        self._timing_counter = 0
+        self._timing_accumulator = {}
+    
+# class PerlinNoiseGPU:
+#     """GPU 加速的柏林噪声生成器"""
+#     def __init__(self, scale=10.0, octaves=2, device='cuda'):
+#         self.scale = scale
+#         self.octaves = octaves
+#         self.device = device
+        
+#     def generate(self, shape, time_offset=0.0):
+#         """生成2D柏林噪声 (全 GPU 实现)
+#         Args:
+#             shape: (height, width)
+#             time_offset: 时间偏移,用于生成连续的噪声
+#         Returns:
+#             noise: shape 的噪声图 Tensor,值范围[0, 1]
+#         """
+#         h, w = shape
+#         noise = torch.zeros((h, w), device=self.device)
+        
+#         # 使用多个八度叠加
+#         amplitude = 1.0
+#         frequency = 1.0
+        
+#         for octave in range(self.octaves):
+#             # 生成随机梯度网格
+#             grid_h = int(h / self.scale / frequency) + 2
+#             grid_w = int(w / self.scale / frequency) + 2
+            
+#             # 🔥 使用时间偏移作为随机种子 (在 GPU 上)
+#             torch.manual_seed(int((time_offset + octave) * 1000) % 2**31)
+#             gradients = torch.randn(grid_h, grid_w, 2, device=self.device)
+            
+#             # 🔥 创建网格坐标 (GPU 张量操作,替代双重循环)
+#             # 生成 (h, w) 的坐标网格
+#             y_coords = torch.arange(h, device=self.device).float().unsqueeze(1) / self.scale / frequency  # [h, 1]
+#             x_coords = torch.arange(w, device=self.device).float().unsqueeze(0) / self.scale / frequency  # [1, w]
+            
+#             # 广播到 (h, w)
+#             y_grid = y_coords.expand(h, w)  # [h, w]
+#             x_grid = x_coords.expand(h, w)  # [h, w]
+            
+#             # 四个角点的整数坐标
+#             x0 = torch.floor(x_grid).long()  # [h, w]
+#             y0 = torch.floor(y_grid).long()
+#             x1 = x0 + 1
+#             y1 = y0 + 1
+
+#             # Clip 坐标防止越界
+#             x0 = torch.clamp(x0, 0, grid_w - 1)
+#             y0 = torch.clamp(y0, 0, grid_h - 1)
+#             x1 = torch.clamp(x1, 0, grid_w - 1)
+#             y1 = torch.clamp(y1, 0, grid_h - 1)
+            
+#             # 🔥 计算四个角点的梯度点积 (向量化计算)
+#             # 相对坐标
+#             sx = x_grid - x0.float()  # [h, w]
+#             sy = y_grid - y0.float()
+            
+#             # 取四个角点的梯度 [h, w, 2]
+#             grad_00 = gradients[y0, x0]  # [h, w, 2]
+#             grad_10 = gradients[y0, x1]
+#             grad_01 = gradients[y1, x0]
+#             grad_11 = gradients[y1, x1]
+            
+#             # 计算到四个角点的向量
+#             vec_00 = torch.stack([x_grid - x0.float(), y_grid - y0.float()], dim=-1)  # [h, w, 2]
+#             vec_10 = torch.stack([x_grid - x1.float(), y_grid - y0.float()], dim=-1)
+#             vec_01 = torch.stack([x_grid - x0.float(), y_grid - y1.float()], dim=-1)
+#             vec_11 = torch.stack([x_grid - x1.float(), y_grid - y1.float()], dim=-1)
+            
+#             # 梯度点积 (向量化)
+#             n00 = (grad_00 * vec_00).sum(dim=-1)  # [h, w]
+#             n10 = (grad_10 * vec_10).sum(dim=-1)
+#             n01 = (grad_01 * vec_01).sum(dim=-1)
+#             n11 = (grad_11 * vec_11).sum(dim=-1)
+            
+#             # 🔥 双线性插值 (向量化)
+#             nx0 = self._lerp(n00, n10, sx)
+#             nx1 = self._lerp(n01, n11, sx)
+#             value = self._lerp(nx0, nx1, sy)
+            
+#             noise += value * amplitude
+#             amplitude *= 0.5
+#             frequency *= 2.0
+        
+#         # 归一化到 [0, 1]
+#         noise = (noise - noise.min()) / (noise.max() - noise.min() + 1e-8)
+#         return noise
+    
+#     def _lerp(self, a, b, t):
+#         """线性插值 (GPU 张量操作)
+#         Args:
+#             a: 起始值 tensor
+#             b: 终止值 tensor
+#             t: 插值系数 tensor [0, 1]
+#         Returns:
+#             插值结果 tensor
+#         """
+#         return a + t * (b - a)
+
 class LeggedRobot(BaseTask):
     def __init__(self, cfg: LeggedRobotCfg, sim_params, physics_engine, sim_device, headless):
         """ Parses the provided config file,
@@ -173,40 +588,58 @@ class LeggedRobot(BaseTask):
 
         # 🔥 初始化柏林噪声生成器
         self.perlin_time_offset = 0.0
+        # 🔥 初始化柏林噪声生成器 (GPU 版本)
+        
         if self.cfg.depth.use_camera:
-            self.perlin_noise_generator = PerlinNoise(
-                scale=self.cfg.depth.perlin_noise_scale,
-                octaves=self.cfg.depth.perlin_noise_octaves
-            )
-            self.perlin_time_offset = 0.0
+            # 🔥 预计算 Sobel 卷积核 (用于边缘检测)
+            sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32, device=sim_device)
+            sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32, device=sim_device)
+            self._sobel_x = sobel_x.view(1, 1, 3, 3)
+            self._sobel_y = sobel_y.view(1, 1, 3, 3)
 
-            # 每个环境独立的时间偏移
-            self.perlin_time_offsets = torch.zeros(self.cfg.env.num_envs, device=sim_device)
-            # 给每个环境不同的初始相位
-            self.perlin_time_offsets = torch.rand(self.cfg.env.num_envs, device=sim_device) * 100
+            print("="*60)
+            print("🔥 初始化 GPU 柏林噪声生成器...")
             
-            # 🔥 新增: 为每个环境分配固定的噪声启用标志
-            # 边缘噪声标志: True=该环境有边缘噪声, False=没有
+            # 🔥 使用 GPU 版本的柏林噪声生成器
+            self.perlin_noise_generator = PerlinNoiseGPU(
+                scale=self.cfg.depth.perlin_noise_scale,
+                octaves=self.cfg.depth.perlin_noise_octaves,
+                device=sim_device
+            )
+            
+            # 每个环境的时间偏移 (在 GPU 上)
+            self.perlin_time_offsets = torch.zeros(
+                self.cfg.env.num_envs,
+                device=sim_device,
+                dtype=torch.float32
+            )
+            
+            # 给每个环境不同的初始相位
+            self.perlin_time_offsets[:] = torch.rand(
+                self.cfg.env.num_envs,
+                device=sim_device
+            ) * 10.0  # 0-10 的随机初始相位
+            
+            # 🔥 环境噪声启用标志
             edge_enable_prob = getattr(self.cfg.depth, 'edge_noise_enable_prob', 1.0)
             self.env_has_edge_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < edge_enable_prob
             
-            # 柏林噪声标志
             perlin_enable_prob = getattr(self.cfg.depth, 'perlin_noise_enable_prob', 1.0)
             self.env_has_perlin_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < perlin_enable_prob
             
-            # 高斯噪声标志
+            # 🔥 块状空洞启用标志 (新增独立概率)
+            hole_enable_prob = getattr(self.cfg.depth, 'hole_noise_enable_prob', 0.2)
+            self.env_has_hole_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < hole_enable_prob
+
             gaussian_enable_prob = getattr(self.cfg.depth, 'gaussian_noise_enable_prob', 1.0)
             self.env_has_gaussian_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < gaussian_enable_prob
             
-            # 打印统计信息
-            print("="*60)
-            print("📊 深度噪声分配统计:")
-            print(f"  - 边缘噪声: {self.env_has_edge_noise.sum().item()}/{self.cfg.env.num_envs} 环境 ({edge_enable_prob*100:.0f}%)")
-            print(f"  - 柏林噪声: {self.env_has_perlin_noise.sum().item()}/{self.cfg.env.num_envs} 环境 ({perlin_enable_prob*100:.0f}%)")
-            print(f"  - 高斯噪声: {self.env_has_gaussian_noise.sum().item()}/{self.cfg.env.num_envs} 环境 ({gaussian_enable_prob*100:.0f}%)")
-            print("="*60)
-            
-            print("✅ Perlin noise generator initialized")
+            print(f"   ✅ GPU 柏林噪声生成器已创建")
+            print(f"   噪声分配统计:")
+            print(f"      - 边缘噪声: {self.env_has_edge_noise.sum().item()}/{self.cfg.env.num_envs} ({edge_enable_prob*100:.0f}%)")
+            print(f"      - 块状空洞: {self.env_has_hole_noise.sum().item()}/{self.cfg.env.num_envs} ({hole_enable_prob*100:.0f}%)")
+            print(f"      - 高斯噪声: {self.env_has_gaussian_noise.sum().item()}/{self.cfg.env.num_envs} ({gaussian_enable_prob*100:.0f}%)")
+
 
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
 
@@ -279,13 +712,406 @@ class LeggedRobot(BaseTask):
         return depth_image
     
     def process_depth_image(self, depth_image, env_id):
-        # These operations are replicated on the hardware
+        """处理深度图像 (全 GPU 优化版本)"""
+        # import time
+        
+        # 🔥 总耗时统计
+        # total_start = time.time()
+        # timings = {}
+        
+        # 裁剪图像
+        #t0 = time.time()
         depth_image = self.crop_depth_image(depth_image)
+        #timings['crop'] = (time.time() - t0) * 1000  # ms
+        
+        # 添加均匀噪声
+        #t0 = time.time()
+        depth_image += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]
+        #timings['uniform_noise'] = (time.time() - t0) * 1000
+        
+        if getattr(self.cfg.depth, 'enable_noise', True):
+            
+            # ==========================================
+            # 🔥 1. Clip: 近距离设为无穷 (全 GPU)
+            # ==========================================
+            #t0 = time.time()
+            distance = torch.abs(depth_image)
+            near_mask = distance < self.cfg.depth.clip_near_distance
+            depth_image[near_mask] = -self.cfg.depth.far_clip
+            #timings['1_clip_near'] = (time.time() - t0) * 1000
+            
+            # ==========================================
+            # 🔥 2. Gaussian noise: 高斯噪声 (全 GPU)
+            # ==========================================
+            #t0 = time.time()
+            if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
+                if self.env_has_gaussian_noise[env_id]:
+                    distance = torch.abs(depth_image)
+                    valid_mask = distance <= 3.0
+                    
+                    base_std = self.cfg.depth.gaussian_noise_std
+                    distance_factor = getattr(self.cfg.depth, 'gaussian_noise_distance_factor', 0.5)
+                    adaptive_std = base_std * (1.0 + distance_factor * distance)
+                    
+                    gaussian_noise = torch.randn_like(depth_image) * adaptive_std
+                    gaussian_noise[~valid_mask] = 0.0
+                    depth_image += gaussian_noise
+            #timings['2_gaussian_noise'] = (time.time() - t0) * 1000
+            
+            # ==========================================
+            # 🔥 3. Edge noise: 边缘噪声 (全 GPU)
+            # ==========================================
+            #t0 = time.time()
+            if hasattr(self.cfg.depth, 'edge_noise_prob') and self.cfg.depth.edge_noise_prob > 0:
+                if self.env_has_edge_noise[env_id]:
+                    # 梯度计算
+                    grad_x = torch.zeros_like(depth_image)
+                    grad_x[:, 1:-1] = (depth_image[:, 2:] - depth_image[:, :-2]) / 2
+                    grad_x[:, 0] = depth_image[:, 1] - depth_image[:, 0]
+                    grad_x[:, -1] = depth_image[:, -1] - depth_image[:, -2]
+                    
+                    grad_y = torch.zeros_like(depth_image)
+                    grad_y[1:-1, :] = (depth_image[2:, :] - depth_image[:-2, :]) / 2
+                    grad_y[0, :] = depth_image[1, :] - depth_image[0, :]
+                    grad_y[-1, :] = depth_image[-1, :] - depth_image[-2, :]
+                    
+                    gradient_magnitude = torch.sqrt(grad_x**2 + grad_y**2)
+                    edge_mask = gradient_magnitude > self.cfg.depth.edge_gradient_threshold
+                    
+                    kernel_size = self.cfg.depth.edge_dilation_kernel_size
+                    edge_4d = edge_mask.float().unsqueeze(0).unsqueeze(0)
+                    edge_dilated = torch.nn.functional.max_pool2d(
+                        edge_4d, 
+                        kernel_size=kernel_size, 
+                        stride=1, 
+                        padding=kernel_size//2
+                    ).squeeze().bool()
+                    
+                    random_mask = torch.rand_like(depth_image) < self.cfg.depth.edge_noise_prob
+                    edge_noise_mask = edge_dilated & random_mask
+                    depth_image[edge_noise_mask] = -self.cfg.depth.far_clip
+            #timings['3_edge_noise'] = (time.time() - t0) * 1000
+            
+            # # ==========================================
+            # # 🔥 4. Holes: 柏林噪声 (全 GPU - 实时生成)
+            # # ==========================================
+            # t0 = time.time()
+            # if hasattr(self.cfg.depth, 'perlin_noise_threshold'):
+            #     if self.env_has_perlin_noise[env_id]:
+            #         # 实时生成
+            #         perlin_tensor = self.perlin_noise_generator.generate(
+            #             depth_image.shape,
+            #             time_offset=self.perlin_time_offsets[env_id].item()
+            #         )
+                    
+            #         # 更新时间偏移
+            #         self.perlin_time_offsets[env_id] += self.cfg.depth.perlin_noise_evolution_speed
+                    
+            #         # 应用阈值
+            #         hole_mask = perlin_tensor > self.cfg.depth.perlin_noise_threshold
+            #         depth_image[hole_mask] = -self.cfg.depth.far_clip
+            # timings['4_perlin_noise'] = (time.time() - t0) * 1000
+
+            # ==========================================
+            # 🔥 4. Holes: 块状随机空洞 (替代柏林噪声)
+            # ==========================================
+            #t0 = time.time()
+            if hasattr(self.cfg.depth, 'hole_noise_prob'):
+                if self.env_has_hole_noise[env_id]:  # 🔥 使用新的标志位
+                    # 参数
+                    hole_prob = getattr(self.cfg.depth, 'hole_noise_prob', 0.15)
+                    hole_size = getattr(self.cfg.depth, 'hole_block_size', 8)
+                    
+                    h, w = depth_image.shape
+                    
+                    # 生成稀疏的随机种子点
+                    sparse_h, sparse_w = h // hole_size, w // hole_size
+                    sparse_mask = torch.rand(sparse_h, sparse_w, device=self.device) < hole_prob
+                    
+                    # 上采样到原始分辨率
+                    hole_mask = torch.nn.functional.interpolate(
+                        sparse_mask.float().unsqueeze(0).unsqueeze(0),
+                        size=(h, w),
+                        mode='nearest'
+                    ).squeeze().bool()
+                    
+                    depth_image[hole_mask] = -self.cfg.depth.far_clip
+            #timings['4_hole_noise'] = (time.time() - t0) * 1000
+
+            # ==========================================
+            # 🔥 5. Blind spot: 去除左侧列 (全 GPU)
+            # ==========================================
+            #t0 = time.time()
+            if hasattr(self.cfg.depth, 'blind_spot_left_columns') and self.cfg.depth.blind_spot_left_columns > 0:
+                depth_image[:, :self.cfg.depth.blind_spot_left_columns] = -self.cfg.depth.far_clip
+            #timings['5_blind_spot'] = (time.time() - t0) * 1000
+            
+            # ==========================================
+            # 原有噪声: dropout, salt_pepper (全 GPU)
+            # ==========================================
+            #t0 = time.time()
+            if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
+                dropout_mask = torch.rand_like(depth_image) < self.cfg.depth.dropout_prob
+                depth_image[dropout_mask] = -self.cfg.depth.far_clip
+            
+            if hasattr(self.cfg.depth, 'salt_pepper_prob') and self.cfg.depth.salt_pepper_prob > 0:
+                salt_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+                depth_image[salt_mask] = -self.cfg.depth.far_clip
+                
+                pepper_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+                depth_image[pepper_mask] = -self.cfg.depth.near_clip
+            #timings['6_dropout_salt_pepper'] = (time.time() - t0) * 1000
+            
+            # ==========================================
+            # 🔥 7. Gaussian Blur: 平滑整个图像 (全 GPU)
+            # ==========================================
+            #t0 = time.time()
+            if getattr(self.cfg.depth, 'apply_gaussian_blur', False):
+                kernel_size = getattr(self.cfg.depth, 'gaussian_blur_kernel_size', 5)
+                sigma = getattr(self.cfg.depth, 'gaussian_blur_sigma', 1.0)
+                
+                if not hasattr(self, '_gaussian_kernel') or self._gaussian_kernel_size != kernel_size:
+                    x = torch.arange(kernel_size, dtype=torch.float32, device=self.device) - kernel_size // 2
+                    gauss_1d = torch.exp(-x**2 / (2 * sigma**2))
+                    gauss_1d = gauss_1d / gauss_1d.sum()
+                    
+                    gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
+                    self._gaussian_kernel = gauss_2d.view(1, 1, kernel_size, kernel_size)
+                    self._gaussian_kernel_size = kernel_size
+                
+                depth_4d = depth_image.unsqueeze(0).unsqueeze(0)
+                depth_blurred = torch.nn.functional.conv2d(
+                    depth_4d, 
+                    self._gaussian_kernel, 
+                    padding=kernel_size//2
+                ).squeeze()
+                depth_image = depth_blurred
+            #timings['7_gaussian_blur'] = (time.time() - t0) * 1000
+        
+        # Clip 到有效范围
+        #t0 = time.time()
+        depth_image = torch.clip(depth_image, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
+        #timings['clip_range'] = (time.time() - t0) * 1000
+        
+        # Resize
+        #t0 = time.time()
+        depth_image = self.resize_transform(depth_image[None, :]).squeeze()
+        #timings['resize'] = (time.time() - t0) * 1000
+        
+        # 归一化
+        # t0 = time.time()
+        depth_image = self.normalize_depth_image(depth_image)
+        # timings['normalize'] = (time.time() - t0) * 1000
+        
+        # # 总耗时
+        # timings['TOTAL'] = (time.time() - total_start) * 1000
+        
+        # # 🔥 每 100 次打印一次统计信息 (避免刷屏)
+        # if not hasattr(self, '_timing_counter'):
+        #     self._timing_counter = 0
+        #     self._timing_accumulator = {k: 0.0 for k in timings.keys()}
+        
+        # # 累积时间
+        # for k, v in timings.items():
+        #     self._timing_accumulator[k] += v
+        
+        # self._timing_counter += 1
+        
+        # # 每 100 次打印平均值
+        # if self._timing_counter % 100 == 0:
+        #     print("\n" + "="*80)
+        #     print(f"📊 深度图像处理性能统计 (平均值, 基于 {self._timing_counter} 次调用)")
+        #     print("="*80)
+            
+        #     # 按顺序打印
+        #     keys_order = ['crop', 'uniform_noise', '1_clip_near', '2_gaussian_noise', 
+        #                 '3_edge_noise', '4_perlin_noise', '5_blind_spot', 
+        #                 '6_dropout_salt_pepper', '7_gaussian_blur', 
+        #                 'clip_range', 'resize', 'normalize', 'TOTAL']
+            
+        #     for key in keys_order:
+        #         if key in self._timing_accumulator:
+        #             avg_time = self._timing_accumulator[key] / self._timing_counter
+        #             if key == 'TOTAL':
+        #                 print("-"*80)
+        #                 print(f"{'⏱️  ' + key:.<50} {avg_time:>8.3f} ms")
+        #             else:
+        #                 # 计算占比
+        #                 total_avg = self._timing_accumulator['TOTAL'] / self._timing_counter
+        #                 percentage = (avg_time / total_avg * 100) if total_avg > 0 else 0
+        #                 print(f"  {key:.<50} {avg_time:>8.3f} ms  ({percentage:>5.1f}%)")
+            
+        #     print("="*80 + "\n")
+            
+        #     # 重置计数器
+        #     self._timing_counter = 0
+        #     self._timing_accumulator = {k: 0.0 for k in timings.keys()}
+    
+        return depth_image
+
+    # def process_depth_image(self, depth_image, env_id):
+    #     """处理深度图像 (全 GPU 优化版本)"""
+    #     # 裁剪图像
+    #     depth_image = self.crop_depth_image(depth_image)
+        
+    #     # 添加均匀噪声
+    #     depth_image += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]
+        
+    #     if getattr(self.cfg.depth, 'enable_noise', True):
+            
+    #         # ==========================================
+    #         # 🔥 1. Clip: 近距离设为无穷 (全 GPU)
+    #         # ==========================================
+    #         distance = torch.abs(depth_image)
+    #         near_mask = distance < self.cfg.depth.clip_near_distance
+    #         depth_image[near_mask] = -self.cfg.depth.far_clip
+            
+    #         # ==========================================
+    #         # 🔥 2. Gaussian noise: 高斯噪声 (全 GPU)
+    #         # ==========================================
+    #         if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
+    #             if self.env_has_gaussian_noise[env_id]:
+    #                 distance = torch.abs(depth_image)
+    #                 valid_mask = distance <= 3.0
+                    
+    #                 base_std = self.cfg.depth.gaussian_noise_std
+    #                 distance_factor = getattr(self.cfg.depth, 'gaussian_noise_distance_factor', 0.5)
+    #                 adaptive_std = base_std * (1.0 + distance_factor * distance)
+                    
+    #                 gaussian_noise = torch.randn_like(depth_image) * adaptive_std
+    #                 gaussian_noise[~valid_mask] = 0.0
+    #                 depth_image += gaussian_noise
+            
+    #         # ==========================================
+    #         # 🔥 3. Edge noise: 边缘噪声 (全 GPU - Sobel)
+    #         # ==========================================
+    #         if hasattr(self.cfg.depth, 'edge_noise_prob') and self.cfg.depth.edge_noise_prob > 0:
+    #             if self.env_has_edge_noise[env_id]:
+    #                 # 🔥 使用 PyTorch 实现 np.gradient() 的效果
+    #                 # np.gradient() 计算的是相邻像素的差分
+                    
+    #                 # X 方向梯度 (axis=1, 列方向)
+    #                 # 中间: (depth[i, j+1] - depth[i, j-1]) / 2
+    #                 # 边界: 前向或后向差分
+    #                 grad_x = torch.zeros_like(depth_image)
+    #                 grad_x[:, 1:-1] = (depth_image[:, 2:] - depth_image[:, :-2]) / 2  # 中间列
+    #                 grad_x[:, 0] = depth_image[:, 1] - depth_image[:, 0]  # 左边界
+    #                 grad_x[:, -1] = depth_image[:, -1] - depth_image[:, -2]  # 右边界
+                    
+    #                 # Y 方向梯度 (axis=0, 行方向)
+    #                 grad_y = torch.zeros_like(depth_image)
+    #                 grad_y[1:-1, :] = (depth_image[2:, :] - depth_image[:-2, :]) / 2  # 中间行
+    #                 grad_y[0, :] = depth_image[1, :] - depth_image[0, :]  # 上边界
+    #                 grad_y[-1, :] = depth_image[-1, :] - depth_image[-2, :]  # 下边界
+                    
+    #                 # 计算梯度幅值
+    #                 gradient_magnitude = torch.sqrt(grad_x**2 + grad_y**2)
+                    
+    #                 # 识别边缘
+    #                 edge_mask = gradient_magnitude > self.cfg.depth.edge_gradient_threshold
+                    
+    #                 # 🔥 使用 max_pool2d 实现膨胀 (替代 cv2.dilate)
+    #                 if self.cfg.depth.edge_dilation_kernel_size > 0:
+    #                     kernel_size = self.cfg.depth.edge_dilation_kernel_size
+    #                     edge_4d = edge_mask.float().unsqueeze(0).unsqueeze(0)
+    #                     edge_dilated = torch.nn.functional.max_pool2d(
+    #                         edge_4d, 
+    #                         kernel_size=kernel_size, 
+    #                         stride=1, 
+    #                         padding=kernel_size//2
+    #                     ).squeeze().bool()
+    #                 else:
+    #                     edge_dilated = edge_mask
+                    
+    #                 # 在边缘处随机设为无穷
+    #                 random_mask = torch.rand_like(depth_image) < self.cfg.depth.edge_noise_prob
+    #                 edge_noise_mask = edge_dilated & random_mask
+    #                 depth_image[edge_noise_mask] = -self.cfg.depth.far_clip
+            
+    #         # ==========================================
+    #         # 🔥 4. Holes: 柏林噪声 (全 GPU - 实时生成)
+    #         # ==========================================
+    #         if hasattr(self.cfg.depth, 'perlin_noise_threshold'):
+    #             if self.env_has_perlin_noise[env_id]:
+    #                 # 🔥 实时生成柏林噪声 (全 GPU,无 CPU 传输)
+    #                 perlin_tensor = self.perlin_noise_generator.generate(
+    #                     depth_image.shape,
+    #                     time_offset=self.perlin_time_offsets[env_id].item()
+    #                 )
+                    
+    #                 # 更新时间偏移
+    #                 self.perlin_time_offsets[env_id] += self.cfg.depth.perlin_noise_evolution_speed
+                    
+    #                 # 应用阈值生成空洞
+    #                 hole_mask = perlin_tensor > self.cfg.depth.perlin_noise_threshold
+    #                 depth_image[hole_mask] = -self.cfg.depth.far_clip
+
+    #         # ==========================================
+    #         # 🔥 5. Blind spot: 去除左侧列 (全 GPU)
+    #         # ==========================================
+    #         if hasattr(self.cfg.depth, 'blind_spot_left_columns') and self.cfg.depth.blind_spot_left_columns > 0:
+    #             depth_image[:, :self.cfg.depth.blind_spot_left_columns] = -self.cfg.depth.far_clip
+            
+    #         # ==========================================
+    #         # 原有噪声: dropout, salt_pepper (全 GPU)
+    #         # ==========================================
+    #         if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
+    #             dropout_mask = torch.rand_like(depth_image) < self.cfg.depth.dropout_prob
+    #             depth_image[dropout_mask] = -self.cfg.depth.far_clip
+            
+    #         if hasattr(self.cfg.depth, 'salt_pepper_prob') and self.cfg.depth.salt_pepper_prob > 0:
+    #             salt_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+    #             depth_image[salt_mask] = -self.cfg.depth.far_clip
+                
+    #             pepper_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+    #             depth_image[pepper_mask] = -self.cfg.depth.near_clip
+            
+    #         # ==========================================
+    #         # 🔥 6. Gaussian Blur: 平滑整个图像 (全 GPU)
+    #         # ==========================================
+    #         if getattr(self.cfg.depth, 'apply_gaussian_blur', False):
+    #             kernel_size = getattr(self.cfg.depth, 'gaussian_blur_kernel_size', 5)
+    #             sigma = getattr(self.cfg.depth, 'gaussian_blur_sigma', 1.0)
+                
+    #             # 🔥 使用预计算的高斯核 (避免重复计算)
+    #             if not hasattr(self, '_gaussian_kernel') or self._gaussian_kernel_size != kernel_size:
+    #                 # 生成一维高斯核
+    #                 x = torch.arange(kernel_size, dtype=torch.float32, device=self.device) - kernel_size // 2
+    #                 gauss_1d = torch.exp(-x**2 / (2 * sigma**2))
+    #                 gauss_1d = gauss_1d / gauss_1d.sum()
+                    
+    #                 # 二维高斯核 (外积)
+    #                 gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
+    #                 self._gaussian_kernel = gauss_2d.view(1, 1, kernel_size, kernel_size)
+    #                 self._gaussian_kernel_size = kernel_size
+                
+    #             # 应用高斯模糊 (GPU 卷积)
+    #             depth_4d = depth_image.unsqueeze(0).unsqueeze(0)
+    #             depth_blurred = torch.nn.functional.conv2d(
+    #                 depth_4d, 
+    #                 self._gaussian_kernel, 
+    #                 padding=kernel_size//2
+    #             ).squeeze()
+    #             depth_image = depth_blurred
+        
+    #     # Clip 到有效范围
+    #     depth_image = torch.clip(depth_image, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
+        
+    #     # Resize (双三次插值,GPU 加速)
+    #     depth_image = self.resize_transform(depth_image[None, :]).squeeze()
+        
+    #     # 归一化
+    #     depth_image = self.normalize_depth_image(depth_image)
+    #     return depth_image
+    
+    # def process_depth_image(self, depth_image, env_id):
+        # These operations are replicated on the hardware
+        # depth_image = self.crop_depth_image(depth_image)
 
         # depth_image += self.cfg.depth.dis_noise * 2 * (torch.rand(1)-0.5)[0] 原有的均匀噪声
 
          
-        depth_image += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]
+        # depth_image += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]
         
         # if getattr(self.cfg.depth, 'enable_noise', True):  # 默认启用噪声
         #     # 添加随机像素点缺失(设为无穷大)
@@ -334,123 +1160,6 @@ class LeggedRobot(BaseTask):
         #         # 添加噪声（注意深度是负值，所以直接加）
         #         depth_image += gaussian_noise
 
-        if getattr(self.cfg.depth, 'enable_noise', True):
-            
-            # ==========================================
-            # 🔥 5. Gaussian noise: 高斯噪声 (按环境启用)
-            # ==========================================
-            if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
-                # 🔥 检查当前环境是否有高斯噪声
-                if self.env_has_gaussian_noise[env_id]:
-                    distance = torch.abs(depth_image)
-                    valid_mask = distance <= 3.0
-                    
-                    base_std = self.cfg.depth.gaussian_noise_std
-                    distance_factor = getattr(self.cfg.depth, 'gaussian_noise_distance_factor', 0.5)
-                    adaptive_std = base_std * (1.0 + distance_factor * distance)
-                    
-                    gaussian_noise = torch.randn_like(depth_image) * adaptive_std
-                    gaussian_noise[~valid_mask] = 0.0
-                    depth_image += gaussian_noise
-
-            # ==========================================
-            # 🔥 1. Clip: 0.2m以内设为无穷大
-            # ==========================================
-            distance = torch.abs(depth_image)
-            near_mask = distance < self.cfg.depth.clip_near_distance
-            depth_image[near_mask] = -self.cfg.depth.far_clip  # 设为最远距离(无穷)
-            
-            # ==========================================
-            # 🔥 2. Edge noise: 边缘噪声 (按环境启用)
-            # ==========================================
-            if hasattr(self.cfg.depth, 'edge_noise_prob') and self.cfg.depth.edge_noise_prob > 0:
-                # 🔥 检查当前环境是否有边缘噪声
-                if self.env_has_edge_noise[env_id]:
-                    # 计算深度梯度
-                    depth_np = depth_image.cpu().numpy()
-                    grad_x = np.abs(np.gradient(depth_np, axis=1))
-                    grad_y = np.abs(np.gradient(depth_np, axis=0))
-                    gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
-                    
-                    # 识别边缘
-                    edge_mask = gradient_magnitude > self.cfg.depth.edge_gradient_threshold
-                    
-                    # 膨胀边缘
-                    if self.cfg.depth.edge_dilation_kernel_size > 0:
-                        import cv2
-                        kernel = np.ones((self.cfg.depth.edge_dilation_kernel_size, 
-                                         self.cfg.depth.edge_dilation_kernel_size), np.uint8)
-                        edge_mask = cv2.dilate(edge_mask.astype(np.uint8), kernel, iterations=1).astype(bool)
-                    
-                    # 在边缘处随机设为无穷
-                    edge_tensor = torch.from_numpy(edge_mask).to(self.device)
-                    random_mask = torch.rand_like(depth_image) < self.cfg.depth.edge_noise_prob
-                    edge_noise_mask = edge_tensor & random_mask
-                    depth_image[edge_noise_mask] = -self.cfg.depth.far_clip
-            
-            # ==========================================
-            # 🔥 3. Holes: 柏林噪声模拟空洞 (按环境启用)
-            # ==========================================
-            if hasattr(self.cfg.depth, 'perlin_noise_threshold'):
-                # 🔥 检查当前环境是否有柏林噪声
-                if self.env_has_perlin_noise[env_id]:
-                    # 只更新当前环境的时间偏移
-                    self.perlin_time_offsets[env_id] += self.cfg.depth.perlin_noise_evolution_speed
-                    
-                    # 使用当前环境的时间偏移
-                    perlin_noise = self.perlin_noise_generator.generate(
-                        depth_image.shape, 
-                        time_offset=self.perlin_time_offsets[env_id].item()
-                    )
-                    perlin_tensor = torch.from_numpy(perlin_noise).to(self.device).float()
-                    
-                    hole_mask = perlin_tensor > self.cfg.depth.perlin_noise_threshold
-                    depth_image[hole_mask] = -self.cfg.depth.far_clip
-            
-            # ==========================================
-            # 🔥 4. Blind spot: 去除左侧5列 (所有环境都有)
-            # ==========================================
-            if hasattr(self.cfg.depth, 'blind_spot_left_columns') and self.cfg.depth.blind_spot_left_columns > 0:
-                depth_image[:, :self.cfg.depth.blind_spot_left_columns] = -self.cfg.depth.far_clip
-            
-
-            
-            # ==========================================
-            # 原有噪声: dropout, salt_pepper
-            # ==========================================
-            if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
-                dropout_mask = torch.rand_like(depth_image) < self.cfg.depth.dropout_prob
-                depth_image[dropout_mask] = -self.cfg.depth.far_clip
-            
-            if hasattr(self.cfg.depth, 'salt_pepper_prob') and self.cfg.depth.salt_pepper_prob > 0:
-                salt_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
-                depth_image[salt_mask] = -self.cfg.depth.far_clip
-                
-                pepper_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
-                depth_image[pepper_mask] = -self.cfg.depth.near_clip
-
-            # ==========================================
-            # 🔥 6. Gaussian Blur: 平滑整个图像 (最后一步!)
-            # ==========================================
-            if getattr(self.cfg.depth, 'apply_gaussian_blur', False):
-                import cv2
-                kernel_size = getattr(self.cfg.depth, 'gaussian_blur_kernel_size', 5)
-                sigma = getattr(self.cfg.depth, 'gaussian_blur_sigma', 1.0)
-                
-                # 转换到 numpy 进行高斯模糊
-                depth_np = depth_image.cpu().numpy()
-                depth_blurred = cv2.GaussianBlur(
-                    depth_np, 
-                    (kernel_size, kernel_size),  # 核大小
-                    sigma  # 标准差
-                )
-                depth_image = torch.from_numpy(depth_blurred).to(self.device).float()
-
-
-        depth_image = torch.clip(depth_image, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
-        depth_image = self.resize_transform(depth_image[None, :]).squeeze()
-        depth_image = self.normalize_depth_image(depth_image)
-        return depth_image
 
     def crop_depth_image(self, depth_image):
         # crop 30 pixels from the left and right and and 20 pixels from bottom and return croped image

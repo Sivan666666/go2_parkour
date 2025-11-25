@@ -139,30 +139,35 @@ class Go2RoughCfg( LeggedRobotCfg ):
         clip_near_distance = 0.15  # 0.15m以内设为无穷大
 
         # 2. Edge noise: 边缘噪声
-        edge_noise_enable_prob = 0.9  #  90%概率启用边缘噪声
+        edge_noise_enable_prob = 0.8  #  80%概率启用边缘噪声
         edge_noise_prob = 0.5  # 边缘处30%概率设为无穷
         edge_gradient_threshold = 0.3  # 深度梯度阈值(米)
         edge_dilation_kernel_size = 3  # 边缘膨胀核大小
 
         # 3. Holes: 柏林噪声模拟空洞
-        perlin_noise_enable_prob = 0.8  #  80%概率启用柏林噪声
+        perlin_noise_enable_prob = 0  #  80%概率启用柏林噪声
         perlin_noise_threshold = 0.8  # 大于此阈值的区域设为空洞
         perlin_noise_scale = 10.0  # 柏林噪声频率
         perlin_noise_octaves = 2  # 柏林噪声叠加层数
         perlin_noise_evolution_speed = 0.005  # 时间演化速度
 
+        #  启用块状空洞 代替 柏林
+        hole_noise_enable_prob = 0.2      # 20% 概率启用块状空洞
+        hole_noise_prob = 0.05        # 5% 区域有空洞
+        hole_block_size = 8           # 8×8 像素的块
+
         # 4. Blind spot: 去除左侧列
         blind_spot_left_columns = 5  # 去除左侧5列
 
         # 5. Gaussian noise: 高斯噪声
-        gaussian_noise_enable_prob = 0.8  #  80%概率启用高斯噪声
+        gaussian_noise_enable_prob = 0.6  #  80%概率启用高斯噪声
         gaussian_noise_std = 0.04
         gaussian_noise_distance_factor = 0.5
 
         # 6. Gaussian Blur: 最终平滑 (新增)
         apply_gaussian_blur = True  # 是否应用高斯模糊
-        gaussian_blur_kernel_size = 5  # 核大小(必须是奇数: 3, 5, 7...)
-        gaussian_blur_sigma = 2.0  # 标准差(越大越模糊)
+        gaussian_blur_kernel_size = 3  # 核大小(必须是奇数: 3, 5, 7...)
+        gaussian_blur_sigma = 1.0  # 标准差(越大越模糊)
 
         # 原有噪声
         dropout_prob = 0.001

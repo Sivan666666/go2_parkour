@@ -72,6 +72,16 @@ def train(args):
     copyfile(LEGGED_GYM_ENVS_DIR + "/base/legged_robot.py", base_robot_backup)
     print(f"✅ Backed up base configs to {log_pth}")
 
+    # 3️⃣ 备份 depth_backbone.py
+    try:
+        import rsl_rl.modules.depth_backbone
+        depth_backbone_src = rsl_rl.modules.depth_backbone.__file__
+        depth_backbone_dst = os.path.join(log_pth, "depth_backbone.py")
+        copyfile(depth_backbone_src, depth_backbone_dst)
+        print(f"✅ Backed up depth_backbone: {depth_backbone_src}")
+    except Exception as e:
+        print(f"⚠️  Warning: Failed to backup depth_backbone.py: {e}")
+
     if args.debug:
         mode = "disabled"
         args.rows = 10
