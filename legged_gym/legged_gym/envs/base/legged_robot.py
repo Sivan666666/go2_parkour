@@ -287,164 +287,164 @@ class LeggedRobot(BaseTask):
          
         depth_image += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]
         
-        if getattr(self.cfg.depth, 'enable_noise', True):  # 默认启用噪声
-            # 添加随机像素点缺失(设为无穷大)
-            if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
-                # 生成随机mask,决定哪些像素点缺失
-                dropout_mask = torch.rand_like(depth_image) < self.cfg.depth.dropout_prob
-                depth_image[dropout_mask] = float('-inf')  # 设为负无穷(因为深度值是负的)
-            
-            # 添加椒盐噪声
-            if hasattr(self.cfg.depth, 'salt_pepper_prob') and self.cfg.depth.salt_pepper_prob > 0:
-                # 盐噪声(设为远端clip值)
-                salt_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
-                depth_image[salt_mask] = -self.cfg.depth.far_clip
-                
-                # 椒噪声(设为近端clip值)
-                pepper_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
-                depth_image[pepper_mask] = -self.cfg.depth.near_clip
-            
-            if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
-                # 深度值是负数，取绝对值得到实际距离
-                distance = torch.abs(depth_image)  # [H, W]
-
-                # 🔥 只对 3m 以内的距离施加噪声
-                valid_mask = distance <= 3.0  # [H, W] 布尔掩码
-                
-                # 🔥 噪声模型：σ(d) = base_std * (1 + distance_factor * d)
-                # 基础噪声：2% 误差
-                base_std = self.cfg.depth.gaussian_noise_std
-                
-                # 距离系数：控制噪声随距离增长的速度
-                # distance_factor = 0.5 表示每增加 1m，噪声增加 50%
-                distance_factor = getattr(self.cfg.depth, 'gaussian_noise_distance_factor', 0.5)
-                
-                # 计算每个像素的自适应标准差
-                # 例如: d=0.5m -> σ=0.02*(1+0.5*0.5)=0.025 (2.5%误差)
-                #      d=1.0m -> σ=0.02*(1+0.5*1.0)=0.03  (3%误差)
-                #      d=2.0m -> σ=0.02*(1+0.5*2.0)=0.04  (4%误差)
-                adaptive_std = base_std * (1.0 + distance_factor * distance)
-                
-                # 生成自适应高斯噪声
-                gaussian_noise = torch.randn_like(depth_image) * adaptive_std
-                
-                # 🔥 只在有效区域添加噪声
-                gaussian_noise[~valid_mask] = 0.0  # 3m 外的噪声设为 0
-
-                # 添加噪声（注意深度是负值，所以直接加）
-                depth_image += gaussian_noise
-
-        # if getattr(self.cfg.depth, 'enable_noise', True):
-            
-        #     # ==========================================
-        #     # 🔥 5. Gaussian noise: 高斯噪声 (按环境启用)
-        #     # ==========================================
-        #     if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
-        #         # 🔥 检查当前环境是否有高斯噪声
-        #         if self.env_has_gaussian_noise[env_id]:
-        #             distance = torch.abs(depth_image)
-        #             valid_mask = distance <= 3.0
-                    
-        #             base_std = self.cfg.depth.gaussian_noise_std
-        #             distance_factor = getattr(self.cfg.depth, 'gaussian_noise_distance_factor', 0.5)
-        #             adaptive_std = base_std * (1.0 + distance_factor * distance)
-                    
-        #             gaussian_noise = torch.randn_like(depth_image) * adaptive_std
-        #             gaussian_noise[~valid_mask] = 0.0
-        #             depth_image += gaussian_noise
-
-        #     # ==========================================
-        #     # 🔥 1. Clip: 0.2m以内设为无穷大
-        #     # ==========================================
-        #     distance = torch.abs(depth_image)
-        #     near_mask = distance < self.cfg.depth.clip_near_distance
-        #     depth_image[near_mask] = -self.cfg.depth.far_clip  # 设为最远距离(无穷)
-            
-        #     # ==========================================
-        #     # 🔥 2. Edge noise: 边缘噪声 (按环境启用)
-        #     # ==========================================
-        #     if hasattr(self.cfg.depth, 'edge_noise_prob') and self.cfg.depth.edge_noise_prob > 0:
-        #         # 🔥 检查当前环境是否有边缘噪声
-        #         if self.env_has_edge_noise[env_id]:
-        #             # 计算深度梯度
-        #             depth_np = depth_image.cpu().numpy()
-        #             grad_x = np.abs(np.gradient(depth_np, axis=1))
-        #             grad_y = np.abs(np.gradient(depth_np, axis=0))
-        #             gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
-                    
-        #             # 识别边缘
-        #             edge_mask = gradient_magnitude > self.cfg.depth.edge_gradient_threshold
-                    
-        #             # 膨胀边缘
-        #             if self.cfg.depth.edge_dilation_kernel_size > 0:
-        #                 import cv2
-        #                 kernel = np.ones((self.cfg.depth.edge_dilation_kernel_size, 
-        #                                  self.cfg.depth.edge_dilation_kernel_size), np.uint8)
-        #                 edge_mask = cv2.dilate(edge_mask.astype(np.uint8), kernel, iterations=1).astype(bool)
-                    
-        #             # 在边缘处随机设为无穷
-        #             edge_tensor = torch.from_numpy(edge_mask).to(self.device)
-        #             random_mask = torch.rand_like(depth_image) < self.cfg.depth.edge_noise_prob
-        #             edge_noise_mask = edge_tensor & random_mask
-        #             depth_image[edge_noise_mask] = -self.cfg.depth.far_clip
-            
-        #     # ==========================================
-        #     # 🔥 3. Holes: 柏林噪声模拟空洞 (按环境启用)
-        #     # ==========================================
-        #     if hasattr(self.cfg.depth, 'perlin_noise_threshold'):
-        #         # 🔥 检查当前环境是否有柏林噪声
-        #         if self.env_has_perlin_noise[env_id]:
-        #             # 只更新当前环境的时间偏移
-        #             self.perlin_time_offsets[env_id] += self.cfg.depth.perlin_noise_evolution_speed
-                    
-        #             # 使用当前环境的时间偏移
-        #             perlin_noise = self.perlin_noise_generator.generate(
-        #                 depth_image.shape, 
-        #                 time_offset=self.perlin_time_offsets[env_id].item()
-        #             )
-        #             perlin_tensor = torch.from_numpy(perlin_noise).to(self.device).float()
-                    
-        #             hole_mask = perlin_tensor > self.cfg.depth.perlin_noise_threshold
-        #             depth_image[hole_mask] = -self.cfg.depth.far_clip
-            
-        #     # ==========================================
-        #     # 🔥 4. Blind spot: 去除左侧5列 (所有环境都有)
-        #     # ==========================================
-        #     if hasattr(self.cfg.depth, 'blind_spot_left_columns') and self.cfg.depth.blind_spot_left_columns > 0:
-        #         depth_image[:, :self.cfg.depth.blind_spot_left_columns] = -self.cfg.depth.far_clip
-            
-
-            
-        #     # ==========================================
-        #     # 原有噪声: dropout, salt_pepper
-        #     # ==========================================
+        # if getattr(self.cfg.depth, 'enable_noise', True):  # 默认启用噪声
+        #     # 添加随机像素点缺失(设为无穷大)
         #     if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
+        #         # 生成随机mask,决定哪些像素点缺失
         #         dropout_mask = torch.rand_like(depth_image) < self.cfg.depth.dropout_prob
-        #         depth_image[dropout_mask] = -self.cfg.depth.far_clip
+        #         depth_image[dropout_mask] = float('-inf')  # 设为负无穷(因为深度值是负的)
             
+        #     # 添加椒盐噪声
         #     if hasattr(self.cfg.depth, 'salt_pepper_prob') and self.cfg.depth.salt_pepper_prob > 0:
+        #         # 盐噪声(设为远端clip值)
         #         salt_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
         #         depth_image[salt_mask] = -self.cfg.depth.far_clip
                 
+        #         # 椒噪声(设为近端clip值)
         #         pepper_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
         #         depth_image[pepper_mask] = -self.cfg.depth.near_clip
+            
+        #     if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
+        #         # 深度值是负数，取绝对值得到实际距离
+        #         distance = torch.abs(depth_image)  # [H, W]
 
-        #     # ==========================================
-        #     # 🔥 6. Gaussian Blur: 平滑整个图像 (最后一步!)
-        #     # ==========================================
-        #     if getattr(self.cfg.depth, 'apply_gaussian_blur', False):
-        #         import cv2
-        #         kernel_size = getattr(self.cfg.depth, 'gaussian_blur_kernel_size', 5)
-        #         sigma = getattr(self.cfg.depth, 'gaussian_blur_sigma', 1.0)
+        #         # 🔥 只对 3m 以内的距离施加噪声
+        #         valid_mask = distance <= 3.0  # [H, W] 布尔掩码
                 
-        #         # 转换到 numpy 进行高斯模糊
-        #         depth_np = depth_image.cpu().numpy()
-        #         depth_blurred = cv2.GaussianBlur(
-        #             depth_np, 
-        #             (kernel_size, kernel_size),  # 核大小
-        #             sigma  # 标准差
-        #         )
-        #         depth_image = torch.from_numpy(depth_blurred).to(self.device).float()
+        #         # 🔥 噪声模型：σ(d) = base_std * (1 + distance_factor * d)
+        #         # 基础噪声：2% 误差
+        #         base_std = self.cfg.depth.gaussian_noise_std
+                
+        #         # 距离系数：控制噪声随距离增长的速度
+        #         # distance_factor = 0.5 表示每增加 1m，噪声增加 50%
+        #         distance_factor = getattr(self.cfg.depth, 'gaussian_noise_distance_factor', 0.5)
+                
+        #         # 计算每个像素的自适应标准差
+        #         # 例如: d=0.5m -> σ=0.02*(1+0.5*0.5)=0.025 (2.5%误差)
+        #         #      d=1.0m -> σ=0.02*(1+0.5*1.0)=0.03  (3%误差)
+        #         #      d=2.0m -> σ=0.02*(1+0.5*2.0)=0.04  (4%误差)
+        #         adaptive_std = base_std * (1.0 + distance_factor * distance)
+                
+        #         # 生成自适应高斯噪声
+        #         gaussian_noise = torch.randn_like(depth_image) * adaptive_std
+                
+        #         # 🔥 只在有效区域添加噪声
+        #         gaussian_noise[~valid_mask] = 0.0  # 3m 外的噪声设为 0
+
+        #         # 添加噪声（注意深度是负值，所以直接加）
+        #         depth_image += gaussian_noise
+
+        if getattr(self.cfg.depth, 'enable_noise', True):
+            
+            # ==========================================
+            # 🔥 5. Gaussian noise: 高斯噪声 (按环境启用)
+            # ==========================================
+            if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
+                # 🔥 检查当前环境是否有高斯噪声
+                if self.env_has_gaussian_noise[env_id]:
+                    distance = torch.abs(depth_image)
+                    valid_mask = distance <= 3.0
+                    
+                    base_std = self.cfg.depth.gaussian_noise_std
+                    distance_factor = getattr(self.cfg.depth, 'gaussian_noise_distance_factor', 0.5)
+                    adaptive_std = base_std * (1.0 + distance_factor * distance)
+                    
+                    gaussian_noise = torch.randn_like(depth_image) * adaptive_std
+                    gaussian_noise[~valid_mask] = 0.0
+                    depth_image += gaussian_noise
+
+            # ==========================================
+            # 🔥 1. Clip: 0.2m以内设为无穷大
+            # ==========================================
+            distance = torch.abs(depth_image)
+            near_mask = distance < self.cfg.depth.clip_near_distance
+            depth_image[near_mask] = -self.cfg.depth.far_clip  # 设为最远距离(无穷)
+            
+            # ==========================================
+            # 🔥 2. Edge noise: 边缘噪声 (按环境启用)
+            # ==========================================
+            if hasattr(self.cfg.depth, 'edge_noise_prob') and self.cfg.depth.edge_noise_prob > 0:
+                # 🔥 检查当前环境是否有边缘噪声
+                if self.env_has_edge_noise[env_id]:
+                    # 计算深度梯度
+                    depth_np = depth_image.cpu().numpy()
+                    grad_x = np.abs(np.gradient(depth_np, axis=1))
+                    grad_y = np.abs(np.gradient(depth_np, axis=0))
+                    gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+                    
+                    # 识别边缘
+                    edge_mask = gradient_magnitude > self.cfg.depth.edge_gradient_threshold
+                    
+                    # 膨胀边缘
+                    if self.cfg.depth.edge_dilation_kernel_size > 0:
+                        import cv2
+                        kernel = np.ones((self.cfg.depth.edge_dilation_kernel_size, 
+                                         self.cfg.depth.edge_dilation_kernel_size), np.uint8)
+                        edge_mask = cv2.dilate(edge_mask.astype(np.uint8), kernel, iterations=1).astype(bool)
+                    
+                    # 在边缘处随机设为无穷
+                    edge_tensor = torch.from_numpy(edge_mask).to(self.device)
+                    random_mask = torch.rand_like(depth_image) < self.cfg.depth.edge_noise_prob
+                    edge_noise_mask = edge_tensor & random_mask
+                    depth_image[edge_noise_mask] = -self.cfg.depth.far_clip
+            
+            # ==========================================
+            # 🔥 3. Holes: 柏林噪声模拟空洞 (按环境启用)
+            # ==========================================
+            if hasattr(self.cfg.depth, 'perlin_noise_threshold'):
+                # 🔥 检查当前环境是否有柏林噪声
+                if self.env_has_perlin_noise[env_id]:
+                    # 只更新当前环境的时间偏移
+                    self.perlin_time_offsets[env_id] += self.cfg.depth.perlin_noise_evolution_speed
+                    
+                    # 使用当前环境的时间偏移
+                    perlin_noise = self.perlin_noise_generator.generate(
+                        depth_image.shape, 
+                        time_offset=self.perlin_time_offsets[env_id].item()
+                    )
+                    perlin_tensor = torch.from_numpy(perlin_noise).to(self.device).float()
+                    
+                    hole_mask = perlin_tensor > self.cfg.depth.perlin_noise_threshold
+                    depth_image[hole_mask] = -self.cfg.depth.far_clip
+            
+            # ==========================================
+            # 🔥 4. Blind spot: 去除左侧5列 (所有环境都有)
+            # ==========================================
+            if hasattr(self.cfg.depth, 'blind_spot_left_columns') and self.cfg.depth.blind_spot_left_columns > 0:
+                depth_image[:, :self.cfg.depth.blind_spot_left_columns] = -self.cfg.depth.far_clip
+            
+
+            
+            # ==========================================
+            # 原有噪声: dropout, salt_pepper
+            # ==========================================
+            if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
+                dropout_mask = torch.rand_like(depth_image) < self.cfg.depth.dropout_prob
+                depth_image[dropout_mask] = -self.cfg.depth.far_clip
+            
+            if hasattr(self.cfg.depth, 'salt_pepper_prob') and self.cfg.depth.salt_pepper_prob > 0:
+                salt_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+                depth_image[salt_mask] = -self.cfg.depth.far_clip
+                
+                pepper_mask = torch.rand_like(depth_image) < (self.cfg.depth.salt_pepper_prob / 2)
+                depth_image[pepper_mask] = -self.cfg.depth.near_clip
+
+            # ==========================================
+            # 🔥 6. Gaussian Blur: 平滑整个图像 (最后一步!)
+            # ==========================================
+            if getattr(self.cfg.depth, 'apply_gaussian_blur', False):
+                import cv2
+                kernel_size = getattr(self.cfg.depth, 'gaussian_blur_kernel_size', 5)
+                sigma = getattr(self.cfg.depth, 'gaussian_blur_sigma', 1.0)
+                
+                # 转换到 numpy 进行高斯模糊
+                depth_np = depth_image.cpu().numpy()
+                depth_blurred = cv2.GaussianBlur(
+                    depth_np, 
+                    (kernel_size, kernel_size),  # 核大小
+                    sigma  # 标准差
+                )
+                depth_image = torch.from_numpy(depth_blurred).to(self.device).float()
 
 
         depth_image = torch.clip(depth_image, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
@@ -1166,16 +1166,18 @@ class LeggedRobot(BaseTask):
             #camera_horizontal_fov = self.cfg.depth.horizontal_fov 
             # camera_horizontal_fov = 87.5
             #  Horizontal FOV 域随机化
-            # Horizontal FOV 域随机化 (从离散值中选择)
-            if hasattr(self.cfg.depth, 'horizontal_fov_range'):
-                # 🔥 从离散的候选值中随机选择一个
-                fov_candidates = self.cfg.depth.horizontal_fov_range
-                camera_horizontal_fov = np.random.choice(fov_candidates)
+            # 80% 概率使用标准值, 20% 概率从候选值中随机选择
+            if hasattr(self.cfg.depth, 'horizontal_fov_range') and hasattr(self.cfg.depth, 'horizontal_fov'):
+                if np.random.random() < 0.8:
+                    # 80% 概率: 使用标准 FOV
+                    camera_horizontal_fov = self.cfg.depth.horizontal_fov
+                else:
+                    # 20% 概率: 从候选值中随机选择
+                    fov_candidates = self.cfg.depth.horizontal_fov_range
+                    camera_horizontal_fov = np.random.choice(fov_candidates)
             else:
-                # 使用固定值
+                # 后备方案: 使用固定值
                 camera_horizontal_fov = self.cfg.depth.horizontal_fov
-
-            camera_props.horizontal_fov = camera_horizontal_fov
 
             camera_handle = self.gym.create_camera_sensor(env_handle, camera_props)
             self.cam_handles.append(camera_handle)

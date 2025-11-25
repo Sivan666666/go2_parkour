@@ -139,13 +139,13 @@ class Go2RoughCfg( LeggedRobotCfg ):
         clip_near_distance = 0.15  # 0.15m以内设为无穷大
 
         # 2. Edge noise: 边缘噪声
-        edge_noise_enable_prob = 0.8  # 🆕 100%概率启用边缘噪声
-        edge_noise_prob = 0.3  # 边缘处30%概率设为无穷
+        edge_noise_enable_prob = 0.9  #  90%概率启用边缘噪声
+        edge_noise_prob = 0.5  # 边缘处30%概率设为无穷
         edge_gradient_threshold = 0.3  # 深度梯度阈值(米)
         edge_dilation_kernel_size = 3  # 边缘膨胀核大小
 
         # 3. Holes: 柏林噪声模拟空洞
-        perlin_noise_enable_prob = 0.8  # 🆕 80%概率启用柏林噪声
+        perlin_noise_enable_prob = 0.8  #  80%概率启用柏林噪声
         perlin_noise_threshold = 0.8  # 大于此阈值的区域设为空洞
         perlin_noise_scale = 10.0  # 柏林噪声频率
         perlin_noise_octaves = 2  # 柏林噪声叠加层数
@@ -155,7 +155,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         blind_spot_left_columns = 5  # 去除左侧5列
 
         # 5. Gaussian noise: 高斯噪声
-        gaussian_noise_enable_prob = 0.8  # 🆕 80%概率启用高斯噪声
+        gaussian_noise_enable_prob = 0.8  #  80%概率启用高斯噪声
         gaussian_noise_std = 0.04
         gaussian_noise_distance_factor = 0.5
 
