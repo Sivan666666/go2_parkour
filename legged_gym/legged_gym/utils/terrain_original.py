@@ -38,14 +38,8 @@ from scipy import ndimage
 from pydelatin import Delatin
 import pyfqmr
 from scipy.ndimage import binary_dilation
-from legged_gym.utils import trimesh
 
-class newSubTerrain(terrain_utils.SubTerrain):
-    def __init__(self, name, width, length, vertical_scale, horizontal_scale, height, downsampled_scale):
-        super().__init__(name, width, length, vertical_scale, horizontal_scale)
-        self.heightsamples = np.zeros((self.width, self.length), dtype=np.int16)
-        self.height = height
-        self.downsampled_scale = downsampled_scale
+
 class Terrain:
     def __init__(self, cfg: LeggedRobotCfg.terrain, num_robots) -> None:
         self.cfg = cfg
@@ -73,9 +67,6 @@ class Terrain:
         self.tot_rows = int(cfg.num_rows * self.length_per_env_pixels) + 2 * self.border
 
         self.height_field_raw = np.zeros((self.tot_rows , self.tot_cols), dtype=np.int16)
-        self.heightsamples = np.zeros((self.tot_rows , self.tot_cols), dtype=np.int16)
-        self.trimeshes = []  # 用来收集所有子地形生成的独立网格
-
         if cfg.curriculum:
             self.curiculum()
         elif cfg.selected:
@@ -87,7 +78,7 @@ class Terrain:
                 self.curiculum(random=True)
             # self.randomized_terrain()   
         
-        # self.heightsamples = self.height_field_raw
+        self.heightsamples = self.height_field_raw
         if self.type=="trimesh":
             print("Converting heightmap to trimesh...")
             if cfg.hf2mesh_method == "grid":
@@ -130,7 +121,7 @@ class Terrain:
                 choice = j / self.cfg.num_cols + 0.001
                 if random:
                     if max_difficulty:
-                        terrain = self.make_terrain(choice, np.random.uniform(0.5, 1))
+                        terrain = self.make_terrain(choice, np.random.uniform(0.7, 1))
                     else:
                         terrain = self.make_terrain(choice, np.random.uniform(0, 1))
                 else:
@@ -144,13 +135,11 @@ class Terrain:
             # Env coordinates in the world
             (i, j) = np.unravel_index(k, (self.cfg.num_rows, self.cfg.num_cols))
 
-            terrain = newSubTerrain("terrain",
+            terrain = terrain_utils.SubTerrain("terrain",
                               width=self.width_per_env_pixels,
                               length=self.length_per_env_pixels,
                               vertical_scale=self.vertical_scale,
-                              horizontal_scale=self.horizontal_scale,
-                              height=self.cfg.height,
-                              downsampled_scale=self.cfg.downsampled_scale)
+                              horizontal_scale=self.horizontal_scale)
 
             eval(terrain_type)(terrain, **self.cfg.terrain_kwargs.terrain_kwargs)
             self.add_terrain_to_map(terrain, i, j)
@@ -161,13 +150,11 @@ class Terrain:
         terrain_utils.random_uniform_terrain(terrain, min_height=-height, max_height=height, step=0.005, downsampled_scale=self.cfg.downsampled_scale)
 
     def make_terrain(self, choice, difficulty):
-        terrain = newSubTerrain(   "terrain",
+        terrain = terrain_utils.SubTerrain(   "terrain",
                                 width=self.length_per_env_pixels,
                                 length=self.width_per_env_pixels,
                                 vertical_scale=self.cfg.vertical_scale,
-                                horizontal_scale=self.cfg.horizontal_scale,
-                                height=self.cfg.height,
-                                downsampled_scale=self.cfg.downsampled_scale)
+                                horizontal_scale=self.cfg.horizontal_scale)
         slope = difficulty * 0.4
         step_height = 0.02 + 0.14 * difficulty
         discrete_obstacles_height = 0.03 + difficulty * 0.15
@@ -191,12 +178,10 @@ class Terrain:
             self.add_roughness(terrain)
         elif choice < self.proportions[4]:
             idx = 4
-            height = 0.1 + 0.3 * difficulty
-            if choice < self.proportions[3]:
+            if choice<self.proportions[3]:
                 idx = 5
-                height *= -1
-            # terrain_utils.pyramid_stairs_terrain(terrain, step_width=1., step_height=height, platform_size=3.)
-            stairs_terrain(terrain, step_height=height, platform_size=2, staircase_length = 12, num_goals=self.num_goals)
+                step_height *= -1
+            terrain_utils.pyramid_stairs_terrain(terrain, step_width=0.31, step_height=step_height, platform_size=3.)
             self.add_roughness(terrain)
         elif choice < self.proportions[5]:
             idx = 6
@@ -219,7 +204,6 @@ class Terrain:
             self.add_roughness(terrain)
         elif choice < self.proportions[8]:
             idx = 9
-            flat_terrain(terrain)
             self.add_roughness(terrain)
             # pass
         elif choice < self.proportions[9]:
@@ -258,21 +242,12 @@ class Terrain:
             half_platform_terrain(terrain, max_height=0.1 + 0.4 * difficulty )
             self.add_roughness(terrain, difficulty=1)
         elif choice < self.proportions[13]:
-            step_height = 0.1 + 0.3 * difficulty
             idx = 13
-            if choice<self.proportions[12]:
+            height = 0.1 + 0.3 * difficulty
+            if choice < self.proportions[12]:
                 idx = 14
-                step_height *= -1
-            hollow_stairs_terrain(
-                terrain,
-                step_height=step_height * 0.9,  # 减小每层上升高度为原来的90%
-                # step_height=step_height,
-                slope_treshold=self.cfg.slope_treshold,
-                step_thickness=0.01,
-                platform_size=2.0,
-                staircase_length=12.0,
-                num_goals=self.num_goals,
-            )
+                height *= -1
+            terrain_utils.pyramid_stairs_terrain(terrain, step_width=1., step_height=height, platform_size=3.)
             self.add_roughness(terrain)
         elif choice < self.proportions[14]:
             x_range = [-0.1, 0.1+0.3*difficulty]  # offset to stone_len
@@ -360,26 +335,11 @@ class Terrain:
         start_y = self.border + j * self.width_per_env_pixels
         end_y = self.border + (j + 1) * self.width_per_env_pixels
         self.height_field_raw[start_x: end_x, start_y:end_y] = terrain.height_field_raw
-        if(np.any(terrain.heightsamples)):
-            self.heightsamples[start_x: end_x, start_y:end_y] = terrain.heightsamples
-        else:
-            self.heightsamples[start_x: end_x, start_y:end_y] = terrain.height_field_raw
 
-        if hasattr(terrain, 'trimeshes') and terrain.trimeshes:
-            print(f">>> DEBUG: Found {len(terrain.trimeshes)} meshes from sub-terrain ({row}, {col}). Collecting them.")
-            
-            origin_x_m = i * self.env_length
-            origin_y_m = j * self.env_width
-            
-            for vertices, triangles in terrain.trimeshes:
-                world_vertices = vertices.copy()
-                world_vertices[:, 0] += origin_x_m
-                world_vertices[:, 1] += origin_y_m
-                self.trimeshes.append((world_vertices, triangles))
-
+        # env_origin_x = (i + 0.5) * self.env_length
         env_origin_x = i * self.env_length + 1.0
         env_origin_y = (j + 0.5) * self.env_width
-        x1 = int((self.env_length/2. - 0.5) / terrain.horizontal_scale)
+        x1 = int((self.env_length/2. - 0.5) / terrain.horizontal_scale) # within 1 meter square range
         x2 = int((self.env_length/2. + 0.5) / terrain.horizontal_scale)
         y1 = int((self.env_width/2. - 0.5) / terrain.horizontal_scale)
         y2 = int((self.env_width/2. + 0.5) / terrain.horizontal_scale)
@@ -389,40 +349,8 @@ class Terrain:
             env_origin_z = np.max(terrain.height_field_raw[x1:x2, y1:y2])*terrain.vertical_scale
         self.env_origins[i, j] = [env_origin_x, env_origin_y, env_origin_z]
         self.terrain_type[i, j] = terrain.idx
-
-        # --- MODIFICATION START: HANDLE BOTH 2D AND 3D GOALS ---
-        if terrain.goals.shape[0] != self.goals.shape[2]:
-            print(f"Warning: Goal count mismatch in terrain generation. Expected {self.goals.shape[2]}, got {terrain.goals.shape[0]}")
-            return # 如果目标点数量不对，直接返回避免更严重的错误
-
-        # 检查 goals 是 2D 还是 3D
-        if terrain.goals.shape[1] == 2:
-            # 这是个 2D goal, 需要我们手动添加 Z 坐标
-            goals_2d_px = (terrain.goals / terrain.horizontal_scale).astype(int)
-            
-            # 裁剪像素坐标以确保在子地形范围内
-            goals_2d_px[:, 0] = np.clip(goals_2d_px[:, 0], 0, terrain.height_field_raw.shape[0] - 1)
-            goals_2d_px[:, 1] = np.clip(goals_2d_px[:, 1], 0, terrain.height_field_raw.shape[1] - 1)
-            
-            # 从子地形的高度场中查询 Z 值
-            z_coords_px = terrain.height_field_raw[goals_2d_px[:, 0], goals_2d_px[:, 1]]
-            z_coords_m = z_coords_px * terrain.vertical_scale
-            
-            # 将 2D goals 和 Z 坐标合并成 3D goals
-            goals_3d_local = np.hstack([terrain.goals, z_coords_m[:, np.newaxis]])
-        else:
-            # 这已经是个 3D goal (来自 hollow_stairs_terrain)
-            goals_3d_local = terrain.goals.copy()
-
-        # 将子地形的局部3D坐标转换为世界3D坐标
-        world_goals = goals_3d_local
-        world_goals[:, 0] += i * self.env_length  # 平移 X
-        world_goals[:, 1] += j * self.env_width  # 平移 Y
-        # 注意：Z 坐标是相对高度，也需要加上 env_origin_z (如果不是0的话)
-        # world_goals[:, 2] += self.env_origins[i, j, 2] # 根据你的逻辑决定是否需要这行
-
-        self.goals[i, j, :, :] = world_goals
-        # --- MODIFICATION END ---
+        self.goals[i, j, :, :2] = terrain.goals + [i * self.env_length, j * self.env_width]
+        # self.env_slope_vec[i, j] = terrain.slope_vector
 
 def gap_terrain(terrain, gap_size, platform_size=1.):
     gap_size = int(gap_size / terrain.horizontal_scale)
@@ -486,373 +414,6 @@ def gap_parkour_terrain(terrain, difficulty, platform_size=2.):
     #             height = scale * (-(slope_angle * np.abs(j - w)) + offset)
     #             if terrain.height_field_raw[i, j] < height:
     #                 terrain.height_field_raw[i, j] = int(height)
-
-def flat_terrain(terrain, num_goals=8):
-    """
-    生成一个完全平坦的地形，并在其上均匀分布目标点。
-
-    Parameters:
-        terrain (terrain): 地形对象。
-        num_goals (int): 必须生成的目标点数量（默认值为8）。
-    Returns:
-        terrain (SubTerrain): 更新后的地形对象。
-    """
-    # 将整个地形设为平地（高度为0）
-    terrain.height_field_raw[:, :] = 0
-
-    # 计算地形的中心位置
-    terrain_mid_y_px = terrain.length // 2
-
-    # 计算目标点的X坐标，均匀分布在地形的宽度范围内
-    goal_x_coords = np.linspace(terrain.width * 0.05, terrain.width * 0.95, num_goals) # 略微偏离边缘
-
-    # 所有目标点的Y坐标都位于地形的中心
-    goal_y_coords = np.full(num_goals, terrain_mid_y_px)
-
-    # 将X和Y坐标组合成目标点的二维数组
-    goals_px = np.vstack([goal_x_coords, goal_y_coords]).T
-
-    # 将目标点从像素坐标转换为实际坐标（米）
-    terrain.goals = goals_px * terrain.horizontal_scale
-
-    return terrain
-
-def stairs_terrain(terrain, step_height, platform_size=1., staircase_length=5.0, num_goals=8):
-    """
-    生成一个指定长度的笔直楼梯，并在平坦的出生区域和楼梯上设置目标点。
-
-    Parameters:
-        terrain (terrain): 地形对象。
-        step_height (float): 每个台阶的高度（米）。
-        platform_size (float): 地形末端顶部平坦区域的大小（米）。
-        staircase_length (float): 楼梯在前进方向（X轴）上的总长度（米）。
-        num_goals (int): 必须生成的目标点数量（固定为8）。
-    Returns:
-        terrain (SubTerrain): 更新后的地形对象。
-    """
-    # 楼梯由 (num_goals - 1) 个台阶和 1 个顶层平台组成。
-    num_steps = num_goals - 1
-
-    # --- 1. 参数转换 (米 -> 像素) ---
-    platform_size_px = int(platform_size / terrain.horizontal_scale)
-    step_height_px = int(step_height / terrain.vertical_scale)
-    staircase_length_px = int(staircase_length / terrain.horizontal_scale)
-    
-    # 考虑地形的整体宽度
-    terrain_width_px = terrain.width
-    terrain_mid_y_px = terrain.length // 2
-
-    # --- 2. 验证输入参数 ---
-    # 确保楼梯总长不超过地形的总宽度
-    staircase_length_px = min(staircase_length_px, terrain_width_px)
-
-    # 定义一个出生区域的长度（例如，地形总长度的10%）
-    # 出生区域用于放置机器人，第一个导航目标点将在此区域之后
-    birth_area_length_px = int(terrain_width_px * 0.1)
-    # 确保出生区域至少有一定长度，以便机器人能移动
-    birth_area_length_px = max(birth_area_length_px, 120) # 至少120个像素
-
-    # 调整出生区域大小避免平地过长(确保总长度不变)
-    tmp = platform_size_px + birth_area_length_px
-    birth_area_length_px = 60
-    platform_size_px = tmp - birth_area_length_px
-
-    # 检查楼梯总长是否足够容纳顶部平台、台阶以及出生区域
-    if staircase_length_px <= platform_size_px + birth_area_length_px or num_steps <= 0:
-        # 如果楼梯配置无效，则只生成一个平地，并在其上均匀分布目标点
-        terrain.height_field_raw[:, :] = 0
-        # 目标点从地形起点开始，均匀分布到地形终点
-        goal_x_coords = np.linspace(birth_area_length_px * 0.5, terrain_width_px * 0.95, num_goals) # 略微偏离边缘
-        goal_y_coords = np.full(num_goals, terrain_mid_y_px)
-        goals_px = np.vstack([goal_x_coords, goal_y_coords]).T
-        terrain.goals = goals_px * terrain.horizontal_scale
-        return terrain
-
-    # --- 3. 计算台阶宽度 ---
-    # 可用于建造台阶的总空间 = 楼梯总长 - 顶部平台长度 - 出生区域长度
-    total_step_space_px = staircase_length_px - platform_size_px - birth_area_length_px
-    # 均匀计算每个台阶的宽度（在前进方向上）
-    step_width_px = int(total_step_space_px / num_steps)
-    if step_width_px < 1: step_width_px = 1 # 确保台阶至少有1像素宽
-
-    # --- 4. 初始化地形和目标点 ---
-    terrain.height_field_raw[:, :] = 0  # 先将整个地形设为平地（出生区域）
-    goals_px = []
-    height = 0
-    current_x_position_px = birth_area_length_px # 台阶从出生区域之后开始
-
-    # --- 5. 添加第一个导航目标点 ---
-    # 第一个目标点放置在出生区域之后，第一级台阶之前
-    # first_nav_goal_x = birth_area_length_px + step_width_px / 2.0
-    # goals_px.append([first_nav_goal_x, terrain_mid_y_px])
-
-    # --- 6. 循环创建台阶 ---
-    for i in range(num_steps):
-        # 计算当前台阶的起止位置
-        start_x = current_x_position_px
-        end_x = current_x_position_px + step_width_px
-        
-        # 增加高度并填充台阶
-        height += step_height_px
-        terrain.height_field_raw[start_x:end_x, :] = height
-
-        # 将目标点放置在当前台阶平面的中心
-        goal_x = start_x + step_width_px / 2.0
-        goals_px.append([goal_x, terrain_mid_y_px])
-
-        # 更新当前前进位置
-        current_x_position_px = end_x
-
-    # --- 7. 创建顶部平台并放置最后一个目标点 ---
-    platform_start_x = current_x_position_px
-    platform_end_x = staircase_length_px
-    terrain.height_field_raw[platform_start_x:platform_end_x, :] = height
-
-    # 将最后一个目标点（第`num_goals`个）放置在顶部平台的中心
-    top_platform_center_x = platform_start_x + (platform_end_x - platform_start_x) / 2.0
-    goals_px.append([top_platform_center_x, terrain_mid_y_px])
-    
-    # --- 8. 转换目标点单位并赋值 ---
-    # # 确保生成的 `goals_px` 数量与 `num_goals` 相符
-    # if len(goals_px) != num_goals:
-    #     # 如果由于某些原因目标点数量不匹配 (例如，num_goals=1)，则进行纠正
-    #     # 这是一个备用逻辑，理想情况下不会触发
-    #     print(f"Warning: Generated {len(goals_px)} goals, but expected {num_goals}. Adjusting goals.")
-    #     if len(goals_px) > num_goals:
-    #         goals_px = goals_px[:num_goals]
-    #     elif len(goals_px) < num_goals:
-    #         # 复制最后一个目标点以补足数量
-    #         last_goal = goals_px[-1]
-    #         while len(goals_px) < num_goals:
-    #             goals_px.append(last_goal)
-    #         goals_px = goals_px[:num_goals] # 再次截断以防万一
-
-    terrain.goals = np.array(goals_px) * terrain.horizontal_scale
-
-    return terrain
-
-def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0.05, platform_size=1., staircase_length=5.0, num_goals=8):
-    """
-    生成一个镂空的楼梯，并可选择性地在其表面添加独立的Perlin噪声起伏。
-    噪声生成使用TerrainPerlin，与barrier_track使用相同的逻辑。
-    
-    Parameters:
-        terrain (terrain): 地形对象。
-        step_height (float): 每个台阶的高度（米）。
-        step_thickness (float): 台阶厚度（米）。
-        platform_size (float): 地形末端顶部平坦区域的大小（米）。
-        staircase_length (float): 楼梯在前进方向（X轴）上的总长度（米）。
-        num_goals (int): 必须生成的目标点数量。
-        add_noise (bool): 是否在台阶表面添加Perlin噪声。
-        noise_kwargs (dict): 用于生成Perlin噪声的参数字典。
-    """
-    def add_roughness_heightfield(heightfield, width, length, difficulty=1):
-        height = terrain.height 
-        def random_uniform_terrain_heightfield(heightfield, min_height, max_height, step):
-            downsampled_scale = terrain.downsampled_scale
-            if downsampled_scale is None:
-                downsampled_scale = terrain.horizontal_scale
-
-            # switch parameters to discrete units
-            min_height = int(min_height / terrain.vertical_scale)
-            max_height = int(max_height / terrain.vertical_scale)
-            step = int(step / terrain.vertical_scale)
-
-            heights_range = np.arange(min_height, max_height + step, step)
-            height_field_downsampled = np.random.choice(heights_range, (int(width * terrain.horizontal_scale / downsampled_scale), int(
-                length * terrain.horizontal_scale / downsampled_scale)))
-
-            x = np.linspace(0, width * terrain.horizontal_scale, height_field_downsampled.shape[0])
-            y = np.linspace(0, length * terrain.horizontal_scale, height_field_downsampled.shape[1])
-
-            f = interpolate.interp2d(y, x, height_field_downsampled, kind='linear')
-
-            x_upsampled = np.linspace(0, width * terrain.horizontal_scale, width)
-            y_upsampled = np.linspace(0, length * terrain.horizontal_scale, length)
-            z_upsampled = np.rint(f(y_upsampled, x_upsampled))
-
-            heightfield += z_upsampled.astype(np.int16)
-            return heightfield
-        max_height = (height[1] - height[0]) * difficulty + height[0]
-        height = random.uniform(height[0], max_height)
-        return random_uniform_terrain_heightfield(heightfield, min_height=-height, max_height=height, step=0.005)
-
-    def fill_heightfield_to_scale(heightfield):
-        """ Due to the rasterization of the heightfield, the trimesh size does not match the 
-        heightfield_resolution * horizontal_scale, so we need to fill enlarge heightfield to
-        meet this scale.
-        """
-        assert len(heightfield.shape) == 2, "heightfield must be 2D"
-        heightfield_x_fill = np.concatenate([
-            heightfield,
-            heightfield[-2:, :],
-        ], axis= 0)
-        heightfield_y_fill = np.concatenate([
-            heightfield_x_fill,
-            heightfield_x_fill[:, -2:],
-        ], axis= 1)
-        return heightfield_y_fill
-
-    # --- 1. 参数转换与初始化 ---
-    num_steps = num_goals - 1
-    platform_size_px = int(platform_size / terrain.horizontal_scale)
-    staircase_length_px = int(staircase_length / terrain.horizontal_scale)
-    
-    terrain_width_px = terrain.width   # X方向像素
-    terrain_length_px = terrain.length # Y方向像素
-    
-    terrain.height_field_raw[:, :] = 0
-    if not hasattr(terrain, 'trimeshes'):
-        terrain.trimeshes = []
-
-    # --- 2. 验证与计算台阶尺寸 ---
-    birth_area_length_px = int(terrain_width_px * 0.1)
-    birth_area_length_px = max(birth_area_length_px, 120)
-
-    # 调整出生区域大小避免平地过长(确保总长度不变)
-    tmp = platform_size_px + birth_area_length_px
-    birth_area_length_px = 60
-    platform_size_px = tmp - birth_area_length_px
-
-    print("birth_area_length_px:", birth_area_length_px)
-    if staircase_length_px <= platform_size_px + birth_area_length_px or num_steps <= 0:
-        print("Warning: Staircase configuration invalid. Generating flat terrain.")
-        terrain.goals = np.zeros((num_goals, 3))
-        goal_x_coords_m = np.linspace(birth_area_length_px * terrain.horizontal_scale, staircase_length_px * terrain.horizontal_scale, num_goals)
-        terrain.goals[:, 0] = goal_x_coords_m
-        terrain.goals[:, 1] = (terrain.length / 2) * terrain.horizontal_scale
-        return terrain
-
-    total_step_space_px = staircase_length_px - platform_size_px - birth_area_length_px
-    step_width_px = int(total_step_space_px / num_steps)
-    if step_width_px < 1: step_width_px = 1
-
-    # --- 4. 循环创建台阶网格和目标点 ---
-    goals_m = []
-    current_height_m = 0.0
-    current_x_pos_px = birth_area_length_px
-    terrain_length_m = terrain.length * terrain.horizontal_scale
-    step_width_m = step_width_px * terrain.horizontal_scale
-
-    step_resolution = (
-        np.ceil(step_width_px).astype(int),
-        np.ceil(terrain_length_px).astype(int)
-    )
-
-    heightsamples = terrain.height_field_raw.copy()
-    heightsamples[:, :] = 0
-
-    for i in range(num_steps):
-        current_height_m += step_height
-        
-        center_x_m = (current_x_pos_px + step_width_px / 2.0) * terrain.horizontal_scale
-        center_y_m = terrain_length_m / 2.0
-        center_z_m = current_height_m - step_thickness / 2.0 # 厚度补充
-        
-        vertices, triangles = trimesh.box_trimesh(
-            size=(step_width_m, terrain_length_m, step_thickness),
-            center_position=(center_x_m, center_y_m, center_z_m)
-        )
-        heightfield_raw = np.zeros(step_resolution, dtype=np.float32)
-        heightfield_raw[:, :] = current_height_m / terrain.vertical_scale  # 填充当前台阶高度
-        # heightfield_raw += heightfield_noise[
-        #     (current_x_pos_px - birth_area_length_px):(current_x_pos_px - birth_area_length_px + step_width_px),
-        #     0: terrain_length_px
-        # ]
-
-        heightfield_raw = add_roughness_heightfield(heightfield_raw, width=step_width_px, length=terrain_length_px, difficulty=1)
-        heightsamples[
-            current_x_pos_px:(current_x_pos_px + step_width_px),
-            0: terrain_length_px
-        ] = heightfield_raw.copy()  # 更新地形高度场 空心楼梯 的高度
-        t_vertices, t_triangles, _ = convert_heightfield_to_trimesh(
-                fill_heightfield_to_scale(heightfield_raw),
-                terrain.horizontal_scale,
-                terrain.vertical_scale,
-                slope_treshold,
-            )
-        t_vertices[:, 0] += (current_x_pos_px) * terrain.horizontal_scale
-        # t_vertices[:, 1] += (terrain_length_m / 2.0)
-        # t_vertices[:, 2] += current_height_m - step_thickness / 2.0
-
-        trimesh_template = (t_vertices, t_triangles)
-        step_trimesh = (vertices, triangles)
-
-        final_trimesh = trimesh.combine_trimeshes(
-                trimesh_template,
-                step_trimesh,
-            )
-        terrain.trimeshes.append(final_trimesh)
-        # terrain.trimeshes.append(trimesh_template)
- 
-        goals_m.append([center_x_m, center_y_m, current_height_m])
-        current_x_pos_px += step_width_px
-
-    # --- 5. 创建顶部平台 ---
-    current_height_m += step_height
-    platform_width_px = staircase_length_px - current_x_pos_px
-    platform_width_m = platform_width_px * terrain.horizontal_scale
-    
-    platform_center_x_m = (current_x_pos_px + platform_width_px / 2.0) * terrain.horizontal_scale
-    platform_center_y_m = terrain_length_m / 2.0
-    platform_center_z_m = current_height_m - step_thickness / 2.0
-
-    platform_resolution = (
-        np.ceil(platform_width_px).astype(int),
-        np.ceil(terrain_length_px).astype(int)
-    )
-    if step_height < 0:
-        terrain.height_field_raw[:, :] = current_height_m / terrain.vertical_scale  # 挖洞
-        terrain.height_field_raw[0: birth_area_length_px, 0: terrain.length] = 0
-
-    vertices, triangles = trimesh.box_trimesh(
-        size=(platform_width_m, terrain_length_m, step_thickness),
-        center_position=(platform_center_x_m, platform_center_y_m, platform_center_z_m)
-    )
-    
-    heightfield_raw = np.zeros(platform_resolution, dtype=np.float32)
-    heightfield_raw[:, :] = current_height_m / terrain.vertical_scale  # 填充当前台阶高度
-    # heightfield_raw += heightfield_noise[
-    #     (current_x_pos_px - birth_area_length_px):(current_x_pos_px - birth_area_length_px + step_width_px),
-    #     0: terrain_length_px
-    # ]
-
-    heightfield_raw = add_roughness_heightfield(heightfield_raw, width=platform_width_px, length=terrain_length_px, difficulty=1)
-    heightsamples[
-        current_x_pos_px:(current_x_pos_px + platform_width_px),
-        0: terrain_length_px
-    ] = heightfield_raw  # 更新地形高度场
-    t_vertices, t_triangles, _ = convert_heightfield_to_trimesh(
-            fill_heightfield_to_scale(heightfield_raw),
-            terrain.horizontal_scale,
-            terrain.vertical_scale,
-            slope_treshold,
-        )
-    t_vertices[:, 0] += (current_x_pos_px) * terrain.horizontal_scale
-    # t_vertices[:, 1] += (terrain_length_m / 2.0)
-    # t_vertices[:, 2] += current_height_m - step_thickness / 2.0
-
-    trimesh_template = (t_vertices, t_triangles)
-    step_trimesh = (vertices, triangles)
-
-    final_trimesh = trimesh.combine_trimeshes(
-            trimesh_template,
-            step_trimesh,
-        )
-
-    terrain.trimeshes.append(final_trimesh)
-
-    goals_m.append([platform_center_x_m, platform_center_y_m, current_height_m])
-
-    # --- 6. 赋值 ---
-    terrain.goals = np.array(goals_m)
-
-    terrain.heightsamples[:, :] = heightsamples[:, :]
-    print("1111111111111111111111111111111111111111111111111111111111111111111")
-    return terrain
-
-
-
 
 def parkour_terrain(terrain, 
                     platform_len=2.5, 

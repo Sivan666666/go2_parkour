@@ -157,7 +157,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         hole_block_size = 8           # 8×8 像素的块
 
         # 4. Blind spot: 去除左侧列
-        blind_spot_left_columns = 5  # 去除左侧5列
+        blind_spot_left_columns = 0  # 去除左侧5列
 
         # 5. Gaussian noise: 高斯噪声
         gaussian_noise_enable_prob = 0.6  #  80%概率启用高斯噪声
