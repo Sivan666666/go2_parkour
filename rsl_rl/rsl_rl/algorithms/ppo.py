@@ -327,8 +327,8 @@ class PPO:
             depth_actor_loss = (actions_teacher_batch.detach() - actions_student_batch).norm(p=2, dim=1).mean()
             yaw_loss = (yaw_teacher_batch.detach() - yaw_student_batch).norm(p=2, dim=1).mean()
 
-            loss = depth_actor_loss + yaw_loss
-
+            # loss = depth_actor_loss + yaw_loss
+            loss = depth_actor_loss
             self.depth_actor_optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(self.depth_actor.parameters(), self.max_grad_norm)

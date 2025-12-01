@@ -90,7 +90,7 @@ class LeggedRobotCfg(BaseConfig):
         use_camera = False
         camera_num_envs = 192
         camera_terrain_num_rows = 10
-        camera_terrain_num_cols = 20
+        camera_terrain_num_cols = 40
 
         # position = [0.27, 0, 0.03]  # front camera 001-g2-1023 checkpoint 31000
  
@@ -160,7 +160,7 @@ class LeggedRobotCfg(BaseConfig):
         
         edge_width_thresh = 0.05
         horizontal_scale = 0.05 # [m] influence computation time by a lot
-        horizontal_scale_camera = 0.1
+        horizontal_scale_camera = 0.05
         vertical_scale = 0.005 # [m]
         border_size = 5 # [m]
         height = [0.02, 0.06]

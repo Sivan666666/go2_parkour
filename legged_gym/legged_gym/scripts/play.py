@@ -117,8 +117,8 @@ def play(args):
     env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
                                     "rough slope up": 0.0,
                                     "rough slope down": 0.0,
-                                    "normal stairs up": 0.2,
-                                    "normal stairs down": 0.2,
+                                    "normal stairs up": 0.0,
+                                    "normal stairs down": 0.4,
                                     "discrete": 0., 
                                     "stepping stones": 0.0,
                                     "gaps": 0., 
@@ -126,8 +126,8 @@ def play(args):
                                     "pit": 0.0,
                                     "wall": 0.0,
                                     "platform": 0.,
-                                    "hollow stairs up": 0.2, 
-                                    "hollow stairs down": 0.2,
+                                    "hollow stairs up": 0.0, 
+                                    "hollow stairs down": 0.4,
                                     "parkour": 0.0,         # 0.2
                                     "parkour_hurdle": 0.0,  # 0.2
                                     "parkour_flat": 0.2,
@@ -145,7 +145,7 @@ def play(args):
     env_cfg.depth.angle = [20, 21]
 
     env_cfg.depth.position = [0.3, 0, 0.147]  # front camera 
-    env_cfg.depth.angle = [29-1, 29+1]  # positive pitch down  #27-5,27+5
+    env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
 
     # for go2
         # position = [0.3, 0, 0.08] # front camera 002-g2-camera 

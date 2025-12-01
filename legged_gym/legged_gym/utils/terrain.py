@@ -191,12 +191,14 @@ class Terrain:
             self.add_roughness(terrain)
         elif choice < self.proportions[4]:
             idx = 4
-            height = 0.1 + 0.3 * difficulty
+            height = 0.1 + 0.1 * difficulty
             if choice < self.proportions[3]:
                 idx = 5
                 height *= -1
             # terrain_utils.pyramid_stairs_terrain(terrain, step_width=1., step_height=height, platform_size=3.)
-            stairs_terrain(terrain, step_height=height, platform_size=2, staircase_length = 12, num_goals=self.num_goals)
+            platform_size_debug=1.6
+            staircase_length_debug=6.0
+            stairs_terrain(terrain, step_height=height, platform_size=platform_size_debug, staircase_length=staircase_length_debug, num_goals=self.num_goals)
             self.add_roughness(terrain)
         elif choice < self.proportions[5]:
             idx = 6
@@ -259,18 +261,30 @@ class Terrain:
             self.add_roughness(terrain, difficulty=1)
         elif choice < self.proportions[13]:
             step_height = 0.1 + 0.3 * difficulty
+            step_height = 0.1 + 0.1 * difficulty
             idx = 13
+
+            num_goals = 8
+            num_steps = num_goals - 1
+            step_width = 0.2  # 20cm
+            staircase_length = 12.0  # 总楼梯区长度
+            birth_area_length = 0.6  # 由 birth_area_length_px = 60 * 0.01 得到
+            # 计算顶部平台长度
+            platform_size = staircase_length - birth_area_length - step_width * num_steps
+            if platform_size < 0:
+                raise ValueError("楼梯太多或太宽，platform_size为负，请调整参数！")
+
             if choice<self.proportions[12]:
                 idx = 14
                 step_height *= -1
             hollow_stairs_terrain(
                 terrain,
-                step_height=step_height * 0.9,  # 减小每层上升高度为原来的90%
+                step_height=step_height,  # 减小每层上升高度为原来的90%
                 # step_height=step_height,
                 slope_treshold=self.cfg.slope_treshold,
                 step_thickness=0.01,
-                platform_size=2.0,
-                staircase_length=12.0,
+                platform_size=1.6,
+                staircase_length=6.0,
                 num_goals=self.num_goals,
             )
             self.add_roughness(terrain)
@@ -553,9 +567,9 @@ def stairs_terrain(terrain, step_height, platform_size=1., staircase_length=5.0,
     birth_area_length_px = max(birth_area_length_px, 120) # 至少120个像素
 
     # 调整出生区域大小避免平地过长(确保总长度不变)
-    tmp = platform_size_px + birth_area_length_px
+    # tmp = platform_size_px + birth_area_length_px
     birth_area_length_px = 60
-    platform_size_px = tmp - birth_area_length_px
+    # platform_size_px = tmp - birth_area_length_px
 
     # 检查楼梯总长是否足够容纳顶部平台、台阶以及出生区域
     if staircase_length_px <= platform_size_px + birth_area_length_px or num_steps <= 0:
@@ -606,6 +620,7 @@ def stairs_terrain(terrain, step_height, platform_size=1., staircase_length=5.0,
     # --- 7. 创建顶部平台并放置最后一个目标点 ---
     platform_start_x = current_x_position_px
     platform_end_x = staircase_length_px
+    height += step_height_px
     terrain.height_field_raw[platform_start_x:platform_end_x, :] = height
 
     # 将最后一个目标点（第`num_goals`个）放置在顶部平台的中心
@@ -710,11 +725,13 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
     birth_area_length_px = max(birth_area_length_px, 120)
 
     # 调整出生区域大小避免平地过长(确保总长度不变)
-    tmp = platform_size_px + birth_area_length_px
+    # tmp = platform_size_px + birth_area_length_px
     birth_area_length_px = 60
-    platform_size_px = tmp - birth_area_length_px
+    # platform_size_px = tmp - birth_area_length_px
 
     print("birth_area_length_px:", birth_area_length_px)
+    print("platform_size_px:", platform_size_px)
+    print("staircase_length_px:", staircase_length_px)
     if staircase_length_px <= platform_size_px + birth_area_length_px or num_steps <= 0:
         print("Warning: Staircase configuration invalid. Generating flat terrain.")
         terrain.goals = np.zeros((num_goals, 3))
@@ -760,7 +777,7 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         #     0: terrain_length_px
         # ]
 
-        heightfield_raw = add_roughness_heightfield(heightfield_raw, width=step_width_px, length=terrain_length_px, difficulty=1)
+        #heightfield_raw = add_roughness_heightfield(heightfield_raw, width=step_width_px, length=terrain_length_px, difficulty=1)
         heightsamples[
             current_x_pos_px:(current_x_pos_px + step_width_px),
             0: terrain_length_px
