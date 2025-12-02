@@ -878,5 +878,140 @@ class DepthOnlyFCBackbone58x87_Original(nn.Module):
 # RecurrentDepthBackbone = RecurrentDepthBackbone_Attention
 # DepthOnlyFCBackbone58x87 = DepthResNetBackbone
 
-RecurrentDepthBackbone = RecurrentDepthBackbone_Original
-DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original
+class RecurrentDepthBackbone_XYH(nn.Module):
+    """
+    针对空心楼梯优化的 RNN 骨干：
+    1. 使用 LSTM 代替 GRU (更好的记忆保持/物体恒存性)。
+    2. 加入 LayerNorm (稳定训练)。
+    3. 加深 Output MLP (更好的解码能力)。
+    """
+    def __init__(self, base_backbone, env_cfg) -> None:
+        super().__init__()
+        activation = nn.ELU()
+        last_activation = nn.Tanh()
+        self.base_backbone = base_backbone
+        
+        # 1. 输入融合层 (保持不变)
+        prop_dim = 53 if env_cfg is None else env_cfg.env.n_proprio
+        self.combination_mlp = nn.Sequential(
+            nn.Linear(32 + prop_dim, 128),
+            activation,
+            nn.Linear(128, 32)
+        )
+        
+        # 2. 核心修改：使用 LSTM 并增加 Hidden Size (可选，保持512通常够用)
+        # LSTM 相比 GRU 更擅长“在输入缺失时保持记忆”
+        self.rnn_hidden_dim = 512
+        self.rnn = nn.LSTM(input_size=32, hidden_size=self.rnn_hidden_dim, batch_first=True)
+        
+        # 3. 核心修改：加入 LayerNorm
+        # 这有助于防止记忆在时间步长中衰减或爆炸
+        self.layer_norm = nn.LayerNorm(self.rnn_hidden_dim)
+
+        # 4. 核心修改：加深 Output MLP
+        # 从 memory 解码出 state 需要非线性变换
+        self.output_mlp = nn.Sequential(
+            nn.Linear(self.rnn_hidden_dim, 256), # 先压缩一下
+            activation,
+            nn.Linear(256, 32 + 2),
+            last_activation
+        )
+        
+        # LSTM 的 hidden state 是一个 tuple (h, c)
+        self.hidden_states = None
+
+    def forward(self, depth_image, proprioception):
+        # [Batch, 32]
+        depth_image = self.base_backbone(depth_image)
+        
+        # [Batch, 32]
+        combined_input = self.combination_mlp(torch.cat((depth_image, proprioception), dim=-1))
+        
+        # LSTM Forward
+        # input: [Batch, Seq=1, Feature=32]
+        # output: [Batch, Seq=1, Hidden=512]
+        rnn_out, self.hidden_states = self.rnn(combined_input[:, None, :], self.hidden_states)
+        
+        # 取出序列维度
+        rnn_out = rnn_out.squeeze(1)
+        
+        # Apply Layer Norm
+        rnn_out = self.layer_norm(rnn_out)
+        
+        # Decode
+        depth_latent = self.output_mlp(rnn_out)
+        
+        return depth_latent
+
+    def detach_hidden_states(self):
+        if self.hidden_states is not None:
+            # LSTM 的 hidden_states 是 (h, c) 的元组，需要分别 detach
+            h, c = self.hidden_states
+            self.hidden_states = (h.detach().clone(), c.detach().clone())
+            
+    def reset_hidden_states(self, batch_size, device):
+        # 某些算法可能需要显式重置
+        self.hidden_states = None
+
+
+class DepthOnlyFCBackbone58x87_XYH(nn.Module):
+    """
+    针对空心楼梯优化的深度图骨干网络。
+    特点：
+    1. 移除 MaxPool，使用 Strided Conv 保留细微边缘特征。
+    2. 网络加深，增强特征提取。
+    """
+    def __init__(self, prop_dim, scandots_output_dim, hidden_state_dim, output_activation=None, num_frames=1):
+        super().__init__()
+
+        self.num_frames = num_frames
+        activation = nn.ELU()
+        self.image_compression = nn.Sequential(
+            # [Layer 1] 初始特征提取
+            # 使用 padding=2 保持分辨率，先不急着缩小，看清细线条
+            # 输入: [1, H, W] -> 输出: [32, H, W]
+            nn.Conv2d(in_channels=self.num_frames, out_channels=32, kernel_size=5, padding=2),
+            activation,
+            
+            # [Layer 2] 第一次智能降采样
+            # 改用 Stride=2 的卷积代替 MaxPool
+            # 相比 MaxPool，它能保留更多纹理信息
+            # 输出: [48, H/2, W/2]
+            nn.Conv2d(in_channels=32, out_channels=48, kernel_size=3, stride=2, padding=1),
+            activation,
+
+            # [Layer 3] 中间层强化
+            # 保持分辨率，加深对几何形状的理解
+            # 输出: [48, H/2, W/2]
+            nn.Conv2d(in_channels=48, out_channels=48, kernel_size=3, stride=1, padding=1),
+            activation,
+
+            # [Layer 4] 第二次智能降采样
+            # 再次缩小，提取高层抽象特征
+            # 输出: [64, H/4, W/4]
+            nn.Conv2d(in_channels=48, out_channels=64, kernel_size=3, stride=2, padding=1),
+            activation,
+            
+            # 拉平
+            nn.Flatten(),
+            # 全连接层映射到目标维度
+            # [32, 25, 39]
+            nn.Linear(21120, 128),
+            activation,
+            nn.Linear(128, scandots_output_dim)
+        )
+
+        if output_activation == "tanh":
+            self.output_activation = nn.Tanh()
+        else:
+            self.output_activation = activation
+
+    def forward(self, images: torch.Tensor):
+        images_compressed = self.image_compression(images.unsqueeze(1))
+        latent = self.output_activation(images_compressed)
+
+        return latent
+
+
+RecurrentDepthBackbone = RecurrentDepthBackbone_XYH
+DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_XYH
