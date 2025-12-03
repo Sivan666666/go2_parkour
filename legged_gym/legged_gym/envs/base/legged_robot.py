@@ -1185,7 +1185,16 @@ class LeggedRobot(BaseTask):
                                                               self.cam_handles[i],
                                                               gymapi.IMAGE_COLOR)
             rgb_image = gymtorch.wrap_tensor(rgb_image_)
+            # Gym 通常返回 [H, W, 4] (RGBA)，我们需要取前3个通道变成 [H, W, 3]
+            if rgb_image.shape[-1] == 4:
+                rgb_image = rgb_image[:, :, :3]
+            
+            # 2. Resize
+            # permute(2,0,1) -> [3, H, W] 适合 TorchVision Resize
+            # resize_transform 后再 permute(1,2,0) -> [H, W, 3] 存入 buffer
             rgb_image = self.resize_transform(rgb_image.permute(2, 0, 1)).permute(1, 2, 0)
+            
+            # 3. 处理 Depth 图像 (保持不变)
             depth_image = gymtorch.wrap_tensor(depth_image_)
             depth_image = self.process_depth_image(depth_image, i)
 
@@ -1296,6 +1305,9 @@ class LeggedRobot(BaseTask):
                 if rgb_img.shape[-1] == 4:
                     # 如果是 RGBA (4通道)，转为 BGR
                     rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGBA2BGR)
+                elif rgb_img.shape[-1] == 3:
+                    # 如果是 RGB (3通道)，转为 BGR
+                    rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
                 # 3. 检查数据类型 (防止全白或全黑)
                 # 如果数据是 float 且最大值大于 1，说明是 0-255 的 float，需要转 uint8  (确实是0-255的float)
                 print("type:", rgb_img.dtype, "max:", rgb_img.max(), "min:", rgb_img.min())
@@ -1825,7 +1837,7 @@ class LeggedRobot(BaseTask):
                                           self.cfg.depth.buffer_len, 
                                           self.cfg.depth.resized[1], 
                                           self.cfg.depth.resized[0],
-                                          4,).to(self.device)
+                                          3,).to(self.device)
 
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, whcih will be called to compute the total reward.
