@@ -190,6 +190,7 @@ def play(args):
     actions = torch.zeros(env.num_envs, 12, device=env.device, requires_grad=False)
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
+    current_rgb = env.rgb_buffer.clone().to(ppo_runner.device) if ppo_runner.if_depth else None
 
     for i in range(10*int(env.max_episode_length)):
         # # 强制设置 yaw 相关命令为0，保持直线行走
@@ -216,7 +217,7 @@ def play(args):
                 if infos["depth"] is not None:
                     obs_student = obs[:, :env.cfg.env.n_proprio].clone()
                     obs_student[:, 6:8] = 0
-                    depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
+                    depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student, current_rgb)
                     depth_latent = depth_latent_and_yaw[:, :-2]
                     yaw = depth_latent_and_yaw[:, -2:] * 0
                 # 不使用 yaw 修正，保持原始观测

@@ -247,12 +247,13 @@ class OnPolicyRunner:
             delta_yaw_ok_buffer = []
             for i in range(self.depth_encoder_cfg["num_steps_per_env"]):
                 if infos["depth"] != None:
+                    current_rgb = self.env.rgb_buffer.clone().to(self.device)   # 传入了两frames！如果要da3记得换！
                     with torch.no_grad():
                         scandots_latent = self.alg.actor_critic.actor.infer_scandots_latent(obs)
                     scandots_latent_buffer.append(scandots_latent)
                     obs_prop_depth = obs[:, :self.env.cfg.env.n_proprio].clone()
                     obs_prop_depth[:, 6:8] = 0
-                    depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth)  # clone is crucial to avoid in-place operation
+                    depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth, current_rgb)  # clone is crucial to avoid in-place operation
                     
                     depth_latent = depth_latent_and_yaw[:, :-2]
                     yaw = 1.5*depth_latent_and_yaw[:, -2:]

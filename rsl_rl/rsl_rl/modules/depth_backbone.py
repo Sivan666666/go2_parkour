@@ -3,6 +3,7 @@ import torch.nn as nn
 import sys
 import torchvision
 from transformers import ViTModel, ViTConfig
+import copy
 
 # ==========================================
 # 🔥 LocoTransformer 架构 (论文实现)
@@ -920,9 +921,9 @@ class RecurrentDepthBackbone_XYH(nn.Module):
         # LSTM 的 hidden state 是一个 tuple (h, c)
         self.hidden_states = None
 
-    def forward(self, depth_image, proprioception):
+    def forward(self, depth_image, proprioception, rgb_image):
         # [Batch, 32]
-        depth_image = self.base_backbone(depth_image)
+        depth_image = self.base_backbone(depth_image, rgb_image)
         
         # [Batch, 32]
         combined_input = self.combination_mlp(torch.cat((depth_image, proprioception), dim=-1))
@@ -1012,6 +1013,224 @@ class DepthOnlyFCBackbone58x87_XYH(nn.Module):
 
         return latent
 
+class RecurrentDepthBackbone_XYH_DA3(nn.Module):
+    """
+    [双流融合版] 针对空心楼梯优化的 RNN 骨干：
+    1. 双流输入：同时处理 物理深度(Sensor) + RGB预测深度(Relative)。
+    2. 使用 LSTM + LayerNorm。
+    3. 加深 Output MLP。
+    """
+    def __init__(self, base_backbone, env_cfg) -> None:
+        super().__init__()
+        activation = nn.ELU()
+        last_activation = nn.Tanh()
+        
+        # 1. 定义双流骨干网络
+        # base_backbone 是处理 Sensor Depth 的
+        self.base_backbone = base_backbone
+        # 复制一份完全一样的结构，用于处理 RGB Depth
+        # 这样两个网络结构相同，但参数是独立训练的，互不干扰
+        self.rgb_backbone = copy.deepcopy(base_backbone)
+        
+        # 2. 计算融合层的输入维度
+        # Sensor Latent (32) + RGB Latent (32) + Proprioception (53)
+        # 假设 backbone 输出是 32 维 (由 scandots_output_dim 决定)
+        backbone_output_dim = 32 
+        prop_dim = 53 if env_cfg is None else env_cfg.env.n_proprio
+        
+        fusion_input_dim = backbone_output_dim + backbone_output_dim + prop_dim
+        
+        # 3. 输入融合层 (修改了输入维度)
+        self.combination_mlp = nn.Sequential(
+            nn.Linear(fusion_input_dim, 128),
+            activation,
+            nn.Linear(128, 32) # 压缩融合后的特征给 LSTM
+        )
+        
+        # 4. LSTM (保持不变)
+        self.rnn_hidden_dim = 512
+        self.rnn = nn.LSTM(input_size=32, hidden_size=self.rnn_hidden_dim, batch_first=True)
+        
+        # 5. LayerNorm (保持不变)
+        self.layer_norm = nn.LayerNorm(self.rnn_hidden_dim)
 
-RecurrentDepthBackbone = RecurrentDepthBackbone_XYH
-DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_XYH
+        # 6. Output MLP (保持不变)
+        self.output_mlp = nn.Sequential(
+            nn.Linear(self.rnn_hidden_dim, 256),
+            activation,
+            nn.Linear(256, 32 + 2),
+            last_activation
+        )
+        
+        self.hidden_states = None
+
+    def forward(self, depth_image, proprioception, rgb_image):
+        # 1. 分别提取特征 (Dual Stream)
+        # [Batch, 32] - 物理深度特征
+        sensor_latent = self.base_backbone(depth_image)
+        
+        # [Batch, 32] - RGB 深度特征 (注意：rgb_image 最好归一化过)
+        rgb_latent = self.rgb_backbone(rgb_image)
+        
+        # 2. 特征拼接 (Sensor + RGB + Proprio)
+        # [Batch, 32+32+53]
+        combined_input = torch.cat((sensor_latent, rgb_latent, proprioception), dim=-1)
+        
+        # 3. 融合 MLP
+        # [Batch, 32]
+        fused_features = self.combination_mlp(combined_input)
+        
+        # 4. LSTM Forward
+        rnn_out, self.hidden_states = self.rnn(fused_features[:, None, :], self.hidden_states)
+        rnn_out = rnn_out.squeeze(1)
+        
+        # 5. Layer Norm & Decode
+        rnn_out = self.layer_norm(rnn_out)
+        depth_latent = self.output_mlp(rnn_out)
+        
+        return depth_latent
+
+    def detach_hidden_states(self):
+        if self.hidden_states is not None:
+            h, c = self.hidden_states
+            self.hidden_states = (h.detach().clone(), c.detach().clone())
+            
+    def reset_hidden_states(self, batch_size, device):
+        self.hidden_states = None
+
+class RecurrentDepthBackbone_XYH_RGB(nn.Module):
+    """
+    [双流融合版] 针对空心楼梯优化的 RNN 骨干 (修复 RGB 维度版)
+    """
+    def __init__(self, base_backbone, env_cfg) -> None:
+        super().__init__()
+        activation = nn.ELU()
+        last_activation = nn.Tanh()
+        
+        # 1. 保存 Sensor Depth 骨干 (不动它)
+        self.base_backbone = base_backbone
+        
+        # 2. 创建 RGB Depth 骨干
+        # 我们复制一份结构，但必须修改第一层以接受 RGB 输入
+        self.rgb_backbone = copy.deepcopy(base_backbone)
+        
+        # 获取 buffer_len (假设 stack 在 dim 1)
+        # 如果 env_cfg 不可用，这里可能需要手动指定，比如 2
+        self.buffer_len = env_cfg.depth.buffer_len if env_cfg else 2
+        
+        # --- 修改 RGB 骨干的第一层卷积 ---
+        # 假设 image_compression 是一个 Sequential，第一层是 Conv2d
+        # RGB 输入通常是 3 通道。总输入通道 = 3 * buffer_len
+        rgb_input_channels = 3 * self.buffer_len
+        
+        first_conv_layer = self.rgb_backbone.image_compression[0]
+        # 检查是否确实是卷积层
+        if isinstance(first_conv_layer, nn.Conv2d):
+            # 创建一个新的卷积层，参数除了 in_channels 外保持一致
+            new_conv = nn.Conv2d(
+                in_channels=rgb_input_channels,
+                out_channels=first_conv_layer.out_channels,
+                kernel_size=first_conv_layer.kernel_size,
+                stride=first_conv_layer.stride,
+                padding=first_conv_layer.padding,
+                bias=(first_conv_layer.bias is not None)
+            )
+            # 替换旧层
+            self.rgb_backbone.image_compression[0] = new_conv
+        else:
+            print("Warning: Could not auto-replace first layer of RGB backbone. Check structure.")
+
+        # 3. 融合层 (保持不变)
+        # 假设 backbone 输出 32 维
+        backbone_output_dim = 32 
+        prop_dim = 53 if env_cfg is None else env_cfg.env.n_proprio
+        
+        fusion_input_dim = backbone_output_dim + backbone_output_dim + prop_dim
+        
+        self.combination_mlp = nn.Sequential(
+            nn.Linear(fusion_input_dim, 128),
+            activation,
+            nn.Linear(128, 32)
+        )
+        
+        # 4. LSTM & Output (保持不变)
+        self.rnn_hidden_dim = 512
+        self.rnn = nn.LSTM(input_size=32, hidden_size=self.rnn_hidden_dim, batch_first=True)
+        self.layer_norm = nn.LayerNorm(self.rnn_hidden_dim)
+        self.output_mlp = nn.Sequential(
+            nn.Linear(self.rnn_hidden_dim, 256),
+            activation,
+            nn.Linear(256, 32 + 2),
+            last_activation
+        )
+        
+        self.hidden_states = None
+
+    def process_rgb(self, rgb_image):
+        """
+        专门处理 RGB 图像的辅助函数
+        输入 rgb_image: [Batch, Stack, Height, Width, 4/3]
+        """
+        # 1. 维度调整与 Flatten
+        # 取前3个通道(RGB)，忽略 Alpha
+        if rgb_image.shape[-1] == 4:
+            rgb_image = rgb_image[..., :3]
+            
+        # [Batch, Stack, H, W, 3] -> [Batch, Stack, 3, H, W]
+        x = rgb_image.permute(0, 1, 4, 2, 3)
+        
+        # 合并 Stack 和 Channel 维度 -> [Batch, Stack*3, H, W]
+        # 例如 Stack=2, 那么通道数就是 6
+        B, S, C, H, W = x.shape
+        x = x.reshape(B, S*C, H, W)
+        
+        # 归一化 (如果是 0-255 的 uint8，建议转 float 并归一化)
+        # 假设外部已经转为 float，如果没有，这里最好除以 255.0
+        # x = x.float() / 255.0 
+        
+        # 2. 通过 RGB Backbone (注意：不能直接调 forward，因为 forward 里可能有 unsqueeze)
+        # 直接调用内部的 Sequential 模块
+        x = self.rgb_backbone.image_compression(x)
+        
+        # Flatten [B, C_out, H_out, W_out] -> [B, Features]
+        x = x.flatten(start_dim=1)
+        
+        # 如果 backbone 后面还有 MLP 层，也要过一遍 (取决于 base_backbone 的结构)
+        # 假设 DepthOnlyFCBackbone 只有 image_compression 输出特征
+        # 如果有 output_mlp 之类的，这里需要补上，例如:
+        # x = self.rgb_backbone.output_mlp(x)
+        
+        return x
+
+    def forward(self, depth_image, proprioception, rgb_image):
+        # 1. 物理深度特征 (调用原版 forward)
+        # depth_image: [Batch, Stack, H, W] -> 内部自处理
+        sensor_latent = self.base_backbone(depth_image)
+        
+        # 2. RGB 深度特征 (调用我们自定义的处理函数)
+        rgb_latent = self.process_rgb(rgb_image)
+        
+        # 3. 特征拼接
+        combined_input = torch.cat((sensor_latent, rgb_latent, proprioception), dim=-1)
+        
+        # 4. 融合与 RNN
+        fused_features = self.combination_mlp(combined_input)
+        
+        rnn_out, self.hidden_states = self.rnn(fused_features[:, None, :], self.hidden_states)
+        rnn_out = rnn_out.squeeze(1)
+        
+        rnn_out = self.layer_norm(rnn_out)
+        depth_latent = self.output_mlp(rnn_out)
+        
+        return depth_latent
+
+    def detach_hidden_states(self):
+        if self.hidden_states is not None:
+            h, c = self.hidden_states
+            self.hidden_states = (h.detach().clone(), c.detach().clone())
+            
+    def reset_hidden_states(self, batch_size, device):
+        self.hidden_states = None
+
+RecurrentDepthBackbone = RecurrentDepthBackbone_XYH_RGB
+DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original
