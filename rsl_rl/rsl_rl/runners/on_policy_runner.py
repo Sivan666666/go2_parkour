@@ -247,7 +247,15 @@ class OnPolicyRunner:
             delta_yaw_ok_buffer = []
             for i in range(self.depth_encoder_cfg["num_steps_per_env"]):
                 if infos["depth"] != None:
-                    current_rgb = self.env.rgb_buffer.clone().to(self.device)   # 传入了两frames！如果要da3记得换！
+                    current_rgb_raw = self.env.rgb_buffer[:, -1].clone().to(self.device) 
+
+                    # 2. 维度变换 [B, H, W, 3] -> [B, 3, H, W]
+                    # PyTorch 和 DA3 都需要 Channel First
+                    current_rgb = current_rgb_raw.permute(0, 3, 1, 2)
+
+                    # 3. 归一化 (0-255 -> 0-1)
+                    # 必须转 float 并除以 255，因为 DA3 Wrapper 期望输入是 0-1 的 float
+                    current_rgb = current_rgb.float() / 255.0
                     with torch.no_grad():
                         scandots_latent = self.alg.actor_critic.actor.infer_scandots_latent(obs)
                     scandots_latent_buffer.append(scandots_latent)

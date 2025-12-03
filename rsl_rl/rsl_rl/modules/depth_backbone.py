@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import sys
 import torchvision
 from transformers import ViTModel, ViTConfig
 import copy
+from depth_anything_3.api import DepthAnything3
 
 # ==========================================
 # 🔥 LocoTransformer 架构 (论文实现)
@@ -1013,48 +1015,211 @@ class DepthOnlyFCBackbone58x87_XYH(nn.Module):
 
         return latent
 
+
+class DepthAnythingTensorWrapper(nn.Module):
+    def __init__(self, encoder="depth-anything/DA3METRIC-LARGE", device="cuda"):
+        super().__init__()
+        print(f"Loading Depth Anything V3 ({encoder})... This may take a while.")
+        
+        # 1. 加载模型
+        # 注意：这里我们直接加载底层模型，不使用 .inference() 这种带 numpy 转换的高级 API
+        try:
+            self.model = DepthAnything3.from_pretrained(encoder).to(device)
+        except Exception as e:
+            print(f"Error loading DA3: {e}")
+            raise e
+
+        # 2. 冻结参数 (极度重要！防止显存爆炸和破坏预训练权重)
+        self.model.eval()
+        for param in self.model.parameters():
+            param.requires_grad = False
+            
+        # DA3 标准输入参数
+        self.mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+        self.std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
+        # DA3 推荐的推理分辨率，太小效果会很差
+
+    def forward(self, rgb_images):
+        """
+        输入: rgb_images [Batch, 3, 58, 87], 范围应该是 0-1 (Float)
+        输出: depth_map [Batch, 1, 58, 87], 范围 0-1 (Float, Normalized)
+        """
+        # 1. 严格的上下文保护，确保不计算梯度
+        with torch.no_grad():
+
+
+            # 3. 标准化 (Normalize)
+            # (Image - Mean) / Std
+            images_norm = (rgb_images - self.mean) / self.std
+
+            # 4. 推理 (Inference)
+            # DA3 的 forward 通常直接返回深度图，或者是一个 list/dict
+            # 针对 Metric 模型，通常返回的是真实深度（米）
+            da_output = self.model(images_norm)
+            
+            # 处理可能的输出格式 (有些版本返回 list)
+            if isinstance(da_output, (list, tuple)):
+                raw_depth = da_output[0]
+            elif isinstance(da_output, dict):
+                raw_depth = da_output['depth']
+            else:
+                raw_depth = da_output
+
+            # 5. 下采样回 RL 分辨率 (Downsample)
+            # 注意：raw_depth 可能是 [B, H, W]，需要 unsqueeze 增加通道维
+            if raw_depth.dim() == 3:
+                raw_depth = raw_depth.unsqueeze(1)
+            depth_small = F.interpolate(raw_depth, size=(58, 87), mode='bilinear', align_corners=False)
+
+            # 6. 归一化 (Instance Normalization)
+            # 将每个样本的深度归一化到 0-1 之间，作为“相对深度”特征
+            # 这对融合非常关键，因为 Metric Depth 的绝对数值可能波动，相对形状更重要
+            batch_min = depth_small.flatten(2).min(dim=2, keepdim=True)[0].unsqueeze(3) # [B, 1, 1, 1]
+            batch_max = depth_small.flatten(2).max(dim=2, keepdim=True)[0].unsqueeze(3) # [B, 1, 1, 1]
+            
+            # 防止除以 0
+            depth_normalized = (depth_small - batch_min) / (batch_max - batch_min + 1e-6)
+
+            return depth_normalized.detach() # 再次确保切断梯度
+
+
+class DepthAnythingTensorWrapper(nn.Module):
+    def __init__(self, encoder="depth-anything/DA3METRIC-LARGE", device="cuda"):
+        super().__init__()
+        print(f"Loading Depth Anything V3 ({encoder})... This may take a while.")
+        
+        # 1. 加载模型
+        # 注意：这里我们直接加载底层模型，不使用 .inference() 这种带 numpy 转换的高级 API
+        try:
+            self.model = DepthAnything3.from_pretrained(encoder).to(device)
+        except Exception as e:
+            print(f"Error loading DA3: {e}")
+            raise e
+
+        # # =========================================================================
+        # # [暴力修复补丁] 递归搜索整个模型树，强制修复 interaction_indexes
+        # # =========================================================================
+        # def recursive_patch(module, path="model"):
+        #     patched = False
+        #     # 1. 检查当前模块是否有 interaction_indexes 属性
+        #     if hasattr(module, 'interaction_indexes'):
+        #         val = getattr(module, 'interaction_indexes')
+        #         if val is None:
+        #             print(f"🔴 [DEBUG] Found buggy attribute at: {path}.interaction_indexes = None")
+        #             # 针对 ViT-Large 的修复参数
+        #             fixed_indexes = [4, 11, 17, 23] 
+        #             setattr(module, 'interaction_indexes', fixed_indexes)
+        #             print(f"🟢 [DEBUG] Patched successfully! Set to: {fixed_indexes}")
+        #             patched = True
+            
+        #     # 2. 递归遍历所有子模块
+        #     for name, child in module.named_children():
+        #         if recursive_patch(child, path=f"{path}.{name}"):
+        #             patched = True
+            
+        #     return patched
+
+        # print("Searching for broken interaction_indexes...")
+        # # 对整个模型进行地毯式搜索
+        # if not recursive_patch(self.model):
+        #     print("⚠️ [WARNING] Could not find any 'interaction_indexes' that is None.")
+        #     print("If the code crashes, check if the model structure has changed.")
+        # else:
+        #     print("✅ [INFO] DA3 Model patched successfully.")
+        # # =========================================================================
+
+        # 2. 冻结参数 (极度重要！防止显存爆炸和破坏预训练权重)
+        self.model.eval()
+        for param in self.model.parameters():
+            param.requires_grad = False
+            
+        # 注册 buffer，确保 mean/std 自动跟随模型 device
+        self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer('std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+        self.infer_size = (70, 98)  
+
+    def forward(self, rgb_images):
+        with torch.no_grad():
+            # 1. Resize (保持 4D: [B, 3, 518, 518])
+            images_resized = F.interpolate(rgb_images, size=self.infer_size, mode='bilinear', align_corners=False)
+            # 2. Normalize (保持 4D)
+            images_norm = (images_resized - self.mean) / self.std
+
+            # 3. --- [核心修复] 增加维度 ---
+            # DINOv2 Backbone 期待 5D 输入: [Batch, Shots, Channels, Height, Width]
+            # 我们把 Shots 设为 1
+            images_input = images_norm.unsqueeze(1) # [B, 1, 3, 518, 518]
+
+            # 4. Forward
+            da_output = self.model(images_input)
+            
+            # 5. 解析输出
+            if isinstance(da_output, (list, tuple)):
+                raw_depth = da_output[0]
+            elif isinstance(da_output, dict):
+                raw_depth = da_output['depth']
+            else:
+                raw_depth = da_output
+            
+            # --- [核心修复] 处理 5D 输出 ---
+            # 如果输出也是 5D [B, 1, H, W] 或 [B, 1, 1, H, W]，就把那个 dummy 维度去掉
+            if raw_depth.dim() == 5: 
+                 # 假设输出是 [B, 1, 1, H, W] -> squeeze(1) -> [B, 1, H, W]
+                 raw_depth = raw_depth.squeeze(1)
+
+            # 确保是 4D [B, 1, H, W]
+            if raw_depth.dim() == 3:
+                raw_depth = raw_depth.unsqueeze(1)
+                
+            depth_small = F.interpolate(raw_depth, size=(58, 87), mode='bilinear', align_corners=False)
+
+            # 6. 归一化 (Instance Normalization)
+            # 将每个样本的深度归一化到 0-1 之间，作为“相对深度”特征
+            # 这对融合非常关键，因为 Metric Depth 的绝对数值可能波动，相对形状更重要
+            batch_min = depth_small.flatten(2).min(dim=2, keepdim=True)[0].unsqueeze(3) # [B, 1, 1, 1]
+            batch_max = depth_small.flatten(2).max(dim=2, keepdim=True)[0].unsqueeze(3) # [B, 1, 1, 1]
+            
+            # 防止除以 0
+            depth_normalized = (depth_small - batch_min) / (batch_max - batch_min + 1e-6)
+
+            return depth_normalized.detach() # 再次确保切断梯度
+
 class RecurrentDepthBackbone_XYH_DA3(nn.Module):
     """
-    [双流融合版] 针对空心楼梯优化的 RNN 骨干：
-    1. 双流输入：同时处理 物理深度(Sensor) + RGB预测深度(Relative)。
-    2. 使用 LSTM + LayerNorm。
-    3. 加深 Output MLP。
+    [双流融合版] 针对空心楼梯优化的 RNN 骨干 (集成 DA3 版)
     """
     def __init__(self, base_backbone, env_cfg) -> None:
         super().__init__()
         activation = nn.ELU()
         last_activation = nn.Tanh()
         
-        # 1. 定义双流骨干网络
-        # base_backbone 是处理 Sensor Depth 的
-        self.base_backbone = base_backbone
-        # 复制一份完全一样的结构，用于处理 RGB Depth
-        # 这样两个网络结构相同，但参数是独立训练的，互不干扰
-        self.rgb_backbone = copy.deepcopy(base_backbone)
+        # --- 1. 初始化 DA3 处理器 ---
+        # 建议：如果显存不够，改用 "depth-anything/DA3-SMALL"
+        self.da3_processor = DepthAnythingTensorWrapper(
+            encoder="depth-anything/DA3METRIC-LARGE", 
+            device=base_backbone.image_compression[0].weight.device # 自动获取设备
+        )
         
-        # 2. 计算融合层的输入维度
-        # Sensor Latent (32) + RGB Latent (32) + Proprioception (53)
-        # 假设 backbone 输出是 32 维 (由 scandots_output_dim 决定)
-        backbone_output_dim = 32 
+        # --- 2. 双流骨干网络 ---
+        self.base_backbone = base_backbone # 处理 Sensor Depth
+        self.rgb_backbone = copy.deepcopy(base_backbone) # 处理 DA3 生成的 Depth
+        
+        # --- 3. 融合层 ---
+        # 两个 32 维 latent + 本体 53 维
         prop_dim = 53 if env_cfg is None else env_cfg.env.n_proprio
+        fusion_input_dim = 32 + 32 + prop_dim
         
-        fusion_input_dim = backbone_output_dim + backbone_output_dim + prop_dim
-        
-        # 3. 输入融合层 (修改了输入维度)
         self.combination_mlp = nn.Sequential(
             nn.Linear(fusion_input_dim, 128),
             activation,
-            nn.Linear(128, 32) # 压缩融合后的特征给 LSTM
+            nn.Linear(128, 32)
         )
         
-        # 4. LSTM (保持不变)
+        # --- 4. LSTM & Output ---
         self.rnn_hidden_dim = 512
         self.rnn = nn.LSTM(input_size=32, hidden_size=self.rnn_hidden_dim, batch_first=True)
-        
-        # 5. LayerNorm (保持不变)
         self.layer_norm = nn.LayerNorm(self.rnn_hidden_dim)
-
-        # 6. Output MLP (保持不变)
         self.output_mlp = nn.Sequential(
             nn.Linear(self.rnn_hidden_dim, 256),
             activation,
@@ -1064,37 +1229,46 @@ class RecurrentDepthBackbone_XYH_DA3(nn.Module):
         
         self.hidden_states = None
 
-    def forward(self, depth_image, proprioception, rgb_image):
-        # 1. 分别提取特征 (Dual Stream)
-        # [Batch, 32] - 物理深度特征
-        sensor_latent = self.base_backbone(depth_image)
+    def forward(self, sensor_depth, proprioception, rgb_image):
+        """
+        sensor_depth: [B, 58, 87] 或 [B, 1, 58, 87] - 真实的物理深度
+        proprioception: [B, 53]
+        rgb_image: [B, 3, 58, 87] - 原始RGB图像 (范围0-1)
+        """
         
-        # [Batch, 32] - RGB 深度特征 (注意：rgb_image 最好归一化过)
-        rgb_latent = self.rgb_backbone(rgb_image)
+        # --- Step 1: DA3 预处理 (Tensor运算, 无numpy, 无梯度) ---
+        # [B, 3, 58, 87] -> DA3 -> Normalize -> [B, 1, 58, 87]
+        # 注意：这里假设 rgb_image 是 (Batch, 3, H, W)
+        # 如果输入是 (Batch, H, W, 3)，请先 permute(0, 3, 1, 2)
+        da3_depth = self.da3_processor(rgb_image)
         
-        # 2. 特征拼接 (Sensor + RGB + Proprio)
-        # [Batch, 32+32+53]
+        # --- Step 2: 双流特征提取 ---
+        # 流1: 物理传感器深度 (Absolute, Sparse)
+        sensor_latent = self.base_backbone(sensor_depth) # -> [B, 32]
+        
+        # 流2: DA3 预测深度 (Relative, Dense)
+        # 我们用专门的 rgb_backbone 来学习如何理解 DA3 的输出
+        rgb_latent = self.rgb_backbone(da3_depth)      # -> [B, 32]
+        
+        # --- Step 3: 融合 ---
         combined_input = torch.cat((sensor_latent, rgb_latent, proprioception), dim=-1)
-        
-        # 3. 融合 MLP
-        # [Batch, 32]
         fused_features = self.combination_mlp(combined_input)
         
-        # 4. LSTM Forward
+        # --- Step 4: 时序记忆 ---
         rnn_out, self.hidden_states = self.rnn(fused_features[:, None, :], self.hidden_states)
-        rnn_out = rnn_out.squeeze(1)
+        rnn_out = self.layer_norm(rnn_out.squeeze(1))
         
-        # 5. Layer Norm & Decode
-        rnn_out = self.layer_norm(rnn_out)
+        # --- Step 5: 输出 ---
         depth_latent = self.output_mlp(rnn_out)
         
         return depth_latent
 
+    # ... detach_hidden_states 和 reset 保持不变 ...
     def detach_hidden_states(self):
         if self.hidden_states is not None:
             h, c = self.hidden_states
             self.hidden_states = (h.detach().clone(), c.detach().clone())
-            
+    
     def reset_hidden_states(self, batch_size, device):
         self.hidden_states = None
 
@@ -1232,5 +1406,5 @@ class RecurrentDepthBackbone_XYH_RGB(nn.Module):
     def reset_hidden_states(self, batch_size, device):
         self.hidden_states = None
 
-RecurrentDepthBackbone = RecurrentDepthBackbone_XYH_RGB
+RecurrentDepthBackbone = RecurrentDepthBackbone_XYH_DA3
 DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original
