@@ -1180,15 +1180,22 @@ class LeggedRobot(BaseTask):
                                                                 self.envs[i], 
                                                                 self.cam_handles[i],
                                                                 gymapi.IMAGE_DEPTH)
-            
+            rgb_image_ = self.gym.get_camera_image_gpu_tensor(self.sim, 
+                                                              self.envs[i], 
+                                                              self.cam_handles[i],
+                                                              gymapi.IMAGE_COLOR)
+            rgb_image = gymtorch.wrap_tensor(rgb_image_)
+            rgb_image = self.resize_transform(rgb_image.permute(2, 0, 1)).permute(1, 2, 0)
             depth_image = gymtorch.wrap_tensor(depth_image_)
             depth_image = self.process_depth_image(depth_image, i)
 
             init_flag = self.episode_length_buf <= 1
             if init_flag[i]:
                 self.depth_buffer[i] = torch.stack([depth_image] * self.cfg.depth.buffer_len, dim=0)
+                self.rgb_buffer[i] = torch.stack([rgb_image] * self.cfg.depth.buffer_len, dim=0)
             else:
                 self.depth_buffer[i] = torch.cat([self.depth_buffer[i, 1:], depth_image.to(self.device).unsqueeze(0)], dim=0)
+                self.rgb_buffer[i] = torch.cat([self.rgb_buffer[i, 1:], rgb_image.to(self.device).unsqueeze(0)], dim=0)
 
         self.gym.end_access_image_tensors(self.sim)
 
@@ -1267,7 +1274,7 @@ class LeggedRobot(BaseTask):
             if not self.cfg.depth.use_camera:
                 self._draw_height_samples()
                 self._draw_goals()
-            self._draw_feet()
+                self._draw_feet()
             if self.cfg.depth.use_camera:
                 window_name = "Depth Image"
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -1283,6 +1290,24 @@ class LeggedRobot(BaseTask):
 
                 cv2.imshow(window_name, resized_depth_image)
                 # cv2.imshow("Depth Image", self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5)
+
+                rgb_img = self.rgb_buffer[self.lookat_id, -1].cpu().numpy()
+                # 2. 检查并转换通道 (Isaac Gym RGB -> OpenCV BGR)
+                if rgb_img.shape[-1] == 4:
+                    # 如果是 RGBA (4通道)，转为 BGR
+                    rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGBA2BGR)
+                # 3. 检查数据类型 (防止全白或全黑)
+                # 如果数据是 float 且最大值大于 1，说明是 0-255 的 float，需要转 uint8  (确实是0-255的float)
+                print("type:", rgb_img.dtype, "max:", rgb_img.max(), "min:", rgb_img.min())
+                if rgb_img.dtype != np.uint8:
+                    if rgb_img.max() > 1.1:
+                        rgb_img = rgb_img.astype(np.uint8)
+                    else:
+                        # 如果是 0-1 的 float，OpenCV 可以显示，但转为 0-255 更通用
+                        rgb_img = (rgb_img * 255).astype(np.uint8)
+                # (可选) 如果你想让 RGB 和 深度图一样大，可以加 resize
+                rgb_img = cv2.resize(rgb_img, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+                cv2.imshow("RGB Image", rgb_img)
                 cv2.waitKey(1)
 
     def reindex_feet(self, vec):
@@ -1796,6 +1821,11 @@ class LeggedRobot(BaseTask):
                                             self.cfg.depth.buffer_len, 
                                             self.cfg.depth.resized[1], 
                                             self.cfg.depth.resized[0]).to(self.device)
+            self.rgb_buffer = torch.zeros(self.num_envs,  
+                                          self.cfg.depth.buffer_len, 
+                                          self.cfg.depth.resized[1], 
+                                          self.cfg.depth.resized[0],
+                                          4,).to(self.device)
 
     def _prepare_reward_function(self):
         """ Prepares a list of reward functions, whcih will be called to compute the total reward.
