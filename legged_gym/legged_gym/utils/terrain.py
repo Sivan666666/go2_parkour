@@ -308,15 +308,16 @@ class Terrain:
             self.add_roughness(terrain)
         elif choice < self.proportions[16]:
             idx = 17
-            parkour_hurdle_terrain(terrain,
-                                   num_stones=self.num_goals - 2,
-                                   stone_len=0.1+0.3*difficulty,
-                                   hurdle_height_range=[0.1+0.1*difficulty, 0.15+0.15*difficulty],
-                                   pad_height=0,
-                                   y_range=self.cfg.y_range,
-                                   half_valid_width=[0.45, 1],
-                                   flat=True
-                                   )
+            # parkour_hurdle_terrain(terrain,
+            #                        num_stones=self.num_goals - 2,
+            #                        stone_len=0.1+0.3*difficulty,
+            #                        hurdle_height_range=[0.1+0.1*difficulty, 0.15+0.15*difficulty],
+            #                        pad_height=0,
+            #                        y_range=self.cfg.y_range,
+            #                        half_valid_width=[0.45, 1],
+            #                        flat=True
+            #                        )
+            flat_terrain(terrain, num_goals=8)
             self.add_roughness(terrain)
         elif choice < self.proportions[17]:
             idx = 18
@@ -504,7 +505,7 @@ def flat_terrain(terrain, num_goals=8):
     terrain_mid_y_px = terrain.length // 2
 
     # 计算目标点的X坐标，均匀分布在地形的宽度范围内
-    goal_x_coords = np.linspace(terrain.width * 0.05, terrain.width * 0.95, num_goals) # 略微偏离边缘
+    goal_x_coords = np.linspace(terrain.width * 0.05, terrain.width * 0.45, num_goals) # 略微偏离边缘
 
     # 所有目标点的Y坐标都位于地形的中心
     goal_y_coords = np.full(num_goals, terrain_mid_y_px)

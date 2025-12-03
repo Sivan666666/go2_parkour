@@ -1261,8 +1261,9 @@ class LeggedRobot(BaseTask):
 
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             self.gym.clear_lines(self.viewer)
-            # self._draw_height_samples()
-            # self._draw_goals()
+            if not self.cfg.depth.use_camera:
+                self._draw_height_samples()
+                self._draw_goals()
             self._draw_feet()
             if self.cfg.depth.use_camera:
                 window_name = "Depth Image"
