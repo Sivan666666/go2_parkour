@@ -115,6 +115,11 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         original = (106, 60)
         resized = (87, 58)
+
+        # 竖向
+        # original = (60, 106)
+        # resized = (58, 87)
+
         # 🔥 Horizontal FOV 域随机化
         horizontal_fov = 87  # 基准值
         horizontal_fov_range = [86, 87, 88]   # 随机范围 86-88 度
@@ -126,7 +131,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         far_clip = 2
 
         # 噪声总开关
-        enable_noise = False
+        enable_noise = True
         dis_noise = 0.0
 
         # 1. Clip: 近距离设为无穷
