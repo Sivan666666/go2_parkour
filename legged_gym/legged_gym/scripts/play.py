@@ -93,58 +93,58 @@ def play(args):
     #                                 "parkour_step": 0.2,
     #                                 "parkour_gap": 0.2, 
     #                                 "demo": 0.}
-    env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-                                    "rough slope up": 0.,
-                                    "rough slope down": 0.0,
-                                    "rough stairs up": 0., 
-                                    "rough stairs down": 0., 
-                                    "discrete": 0., 
-                                    "stepping stones": 0.0,
-                                    "gaps": 0., 
-                                    "smooth flat": 0,
-                                    "pit": 0.0,
-                                    "wall": 0.0,
-                                    "platform": 0.,
-                                    "large stairs up": 0.,
-                                    "large stairs down": 0.,
-                                    "parkour": 0.2,
-                                    "parkour_hurdle": 0.2,
-                                    "parkour_flat": 0.2,
-                                    "parkour_step": 0.2,
-                                    "parkour_gap": 0.2, 
-                                    "demo": 0.}
+    # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
+    #                                 "rough slope up": 0.,
+    #                                 "rough slope down": 0.0,
+    #                                 "rough stairs up": 0., 
+    #                                 "rough stairs down": 0., 
+    #                                 "discrete": 0., 
+    #                                 "stepping stones": 0.0,
+    #                                 "gaps": 0., 
+    #                                 "smooth flat": 0,
+    #                                 "pit": 0.0,
+    #                                 "wall": 0.0,
+    #                                 "platform": 0.,
+    #                                 "large stairs up": 0.,
+    #                                 "large stairs down": 0.,
+    #                                 "parkour": 0.2,
+    #                                 "parkour_hurdle": 0.2,
+    #                                 "parkour_flat": 0.2,
+    #                                 "parkour_step": 0.2,
+    #                                 "parkour_gap": 0.2, 
+    #                                 "demo": 0.}
     
-    env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-                                    "rough slope up": 0.0,
-                                    "rough slope down": 0.0,
-                                    "normal stairs up": 0.0,
-                                    "normal stairs down": 0.4,
-                                    "discrete": 0., 
-                                    "stepping stones": 0.0,
-                                    "gaps": 0., 
-                                    "flat": 0.0,
-                                    "pit": 0.0,
-                                    "wall": 0.0,
-                                    "platform": 0.,
-                                    "hollow stairs up": 0.0, 
-                                    "hollow stairs down": 0.4,
-                                    "parkour": 0.0,         # 0.2
-                                    "parkour_hurdle": 0.0,  # 0.2
-                                    "parkour_flat": 0.2,
-                                    "parkour_step": 0.0,    # 0.2
-                                    "parkour_gap": 0.0,     # 0.2
-                                    "demo": 0.0}            # 0.2
+    # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
+    #                                 "rough slope up": 0.0,
+    #                                 "rough slope down": 0.0,
+    #                                 "normal stairs up": 0.0,
+    #                                 "normal stairs down": 0.4,
+    #                                 "discrete": 0., 
+    #                                 "stepping stones": 0.0,
+    #                                 "gaps": 0., 
+    #                                 "flat": 0.2,
+    #                                 "pit": 0.0,
+    #                                 "wall": 0.0,
+    #                                 "platform": 0.,
+    #                                 "hollow stairs up": 0.0, 
+    #                                 "hollow stairs down": 0.4,
+    #                                 "parkour": 0.0,         # 0.2
+    #                                 "parkour_hurdle": 0.0,  # 0.2
+    #                                 "parkour_flat": 0.,
+    #                                 "parkour_step": 0.0,    # 0.2
+    #                                 "parkour_gap": 0.0,     # 0.2
+    #                                 "demo": 0.0}            # 0.2
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
     env_cfg.terrain.max_difficulty = True
     
-    env_cfg.depth.angle = [0, 1]
+    # env_cfg.depth.angle = [0, 1]
 
-    env_cfg.depth.position =  [0.355, 0, 0.065]
-    env_cfg.depth.angle = [20, 21]
+    # env_cfg.depth.position =  [0.355, 0, 0.065]
+    # env_cfg.depth.angle = [20, 21]
 
-    env_cfg.depth.position = [0.35, 0, 0.147]  # front camera 
+    # env_cfg.depth.position = [0.35, 0, 0.147]  # front camera 
     env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
 
     # for go2

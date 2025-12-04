@@ -1264,9 +1264,10 @@ class LeggedRobot(BaseTask):
 
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             self.gym.clear_lines(self.viewer)
-            # self._draw_height_samples()
-            # self._draw_goals()
-            # self._draw_feet()
+            if not self.cfg.depth.use_camera:
+                self._draw_height_samples()
+                self._draw_goals()
+                self._draw_feet()
             if self.cfg.depth.use_camera:
                 window_name = "Depth Image"
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -1956,7 +1957,7 @@ class LeggedRobot(BaseTask):
 
             camera_handle = self.gym.create_camera_sensor(env_handle, camera_props)
             self.cam_handles.append(camera_handle)
-            print(self.cam_handles)
+            # print(self.cam_handles)
             local_transform = gymapi.Transform()
             
             camera_position_center = np.copy(config.position)
