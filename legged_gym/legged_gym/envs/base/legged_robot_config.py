@@ -160,7 +160,7 @@ class LeggedRobotCfg(BaseConfig):
         
         edge_width_thresh = 0.05
         horizontal_scale = 0.05 # [m] influence computation time by a lot
-        horizontal_scale_camera = 0.05
+        horizontal_scale_camera = 0.1
         vertical_scale = 0.005 # [m]
         border_size = 5 # [m]
         height = [0.02, 0.06]
@@ -189,27 +189,6 @@ class LeggedRobotCfg(BaseConfig):
         num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
         num_cols = 40 # number of terrain cols (types)
         
-        # terrain_dict = {"smooth slope": 0., 
-        #                 "rough slope up": 0.0,
-        #                 "rough slope down": 0.0,
-        #                 "rough stairs up": 0., 
-        #                 "rough stairs down": 0., 
-        #                 "discrete": 0., 
-        #                 "stepping stones": 0.0,
-        #                 "gaps": 0., 
-        #                 "smooth flat": 0,
-        #                 "pit": 0.0,
-        #                 "wall": 0.0,
-        #                 "platform": 0.,
-        #                 "large stairs up": 0.,
-        #                 "large stairs down": 0.,
-        #                 "parkour": 0.0,
-        #                 "parkour_hurdle": 0.3,
-        #                 "parkour_flat": 0.2,
-        #                 "parkour_step": 0.3,
-        #                 "parkour_gap": 0.2,
-        #                 "demo": 0.0,}
-        
         terrain_dict = {"smooth slope": 0., 
                         "rough slope up": 0.0,
                         "rough slope down": 0.0,
@@ -231,26 +210,6 @@ class LeggedRobotCfg(BaseConfig):
                         "parkour_gap": 0.0,     # 0.2
                         "demo": 0.0}            # 0.2
         
-        # terrain_dict = {"smooth slope": 0., 
-        #                 "rough slope up": 0.0,
-        #                 "rough slope down": 0.0,
-        #                 "rough stairs up": 0., 
-        #                 "rough stairs down": 0., 
-        #                 "discrete": 0., 
-        #                 "stepping stones": 0.0,
-        #                 "gaps": 0., 
-        #                 "smooth flat": 0,
-        #                 "pit": 0.0,
-        #                 "wall": 0.0,
-        #                 "platform": 0.,
-        #                 "large stairs up": 0.,
-        #                 "large stairs down": 0.,
-        #                 "parkour": 0.0,
-        #                 "parkour_hurdle": 0.2,
-        #                 "parkour_flat": 0.2,
-        #                 "parkour_step": 0.2,
-        #                 "parkour_gap": 0.2,
-        #                 "demo": 0.2,}
         terrain_proportions = list(terrain_dict.values())
         
         # trimesh only:

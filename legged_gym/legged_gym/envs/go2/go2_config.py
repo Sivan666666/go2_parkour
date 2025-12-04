@@ -93,12 +93,6 @@ class Go2RoughCfg( LeggedRobotCfg ):
         terminate_after_contacts_on = ["base"]#, "thigh", "calf"]
         self_collisions = 1 # 1 to disable, 0 to enable...bitwise filter
   
-    class rewards( LeggedRobotCfg.rewards ):
-        soft_dof_pos_limit = 0.9
-        base_height_target = 0.3
-        # class scales( LeggedRobotCfg.rewards.scales ):
-            # torques = -0.0002
-            # dof_pos_limits = -10.0
 
     class depth( LeggedRobotCfg.depth ):
         use_camera = False
@@ -132,7 +126,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         far_clip = 2
 
         # 噪声总开关
-        enable_noise = True
+        enable_noise = False
         dis_noise = 0.0
 
         # 1. Clip: 近距离设为无穷
@@ -176,6 +170,45 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         scale = 1
         invert = True
+
+    class rewards( LeggedRobotCfg.rewards ):
+        soft_dof_pos_limit = 0.9
+        base_height_target = 0.25
+
+    # class rewards( LeggedRobotCfg.rewards ):
+    #     class scales:
+    #         # tracking rewards
+    #         tracking_goal_vel = 1.5
+    #         tracking_yaw = 0.5
+    #         # regularization rewards
+    #         lin_vel_z = -0.5
+    #         ang_vel_xy = -0.05
+    #         orientation = -0.1
+    #         dof_acc = -2.5e-7
+    #         collision = -10.
+    #         action_rate = -0.1
+    #         delta_torques = -1.0e-7
+    #         torques = -0.00001
+    #         hip_pos = -0.5
+    #         dof_error = -0.04
+    #         feet_stumble = -1
+    #         feet_edge = -1
+    #         # 根据HIMLOCO新加的奖励函数
+    #         # feet_air_time = 0.  # 增加足部悬空时间奖励
+    #         # foot_clearance = -0.1  # 增大足部抬高奖励
+    #         # smoothness = -0.01
+    #         # base_height = -0.2
+    #         # no_move_when_command = -0.
+
+    #     only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
+    #     tracking_sigma = 0.2 # tracking reward = exp(-error^2/sigma)
+    #     soft_dof_pos_limit = 0.9 # percentage of urdf limits, values above this limit are penalized
+    #     soft_dof_vel_limit = 1
+    #     soft_torque_limit = 0.4
+    #     base_height_target = 0.3
+    #     max_contact_force = 100. # forces above this value are penalized
+    #     # # 根据HIMLOCO新加的阈值
+    #     # clearance_height_target = -0.2
 
 class Go2RoughCfgPPO( LeggedRobotCfgPPO ):
     class algorithm( LeggedRobotCfgPPO.algorithm ):
