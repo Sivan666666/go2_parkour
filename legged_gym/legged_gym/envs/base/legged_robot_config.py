@@ -184,7 +184,7 @@ class LeggedRobotCfg(BaseConfig):
         selected = False # select a unique terrain type and pass all arguments
         terrain_kwargs = None # Dict of arguments for selected terrain
         max_init_terrain_level = 5 # starting curriculum state
-        terrain_length = 18.
+        terrain_length = 10.
         terrain_width = 4
         num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
         num_cols = 40 # number of terrain cols (types)
@@ -197,7 +197,7 @@ class LeggedRobotCfg(BaseConfig):
                         "discrete": 0., 
                         "stepping stones": 0.0,
                         "gaps": 0., 
-                        "flat": 0.0,
+                        "flat": 0.2,
                         "pit": 0.0,
                         "wall": 0.0,
                         "platform": 0.,
@@ -205,7 +205,7 @@ class LeggedRobotCfg(BaseConfig):
                         "hollow stairs up": 0.4,
                         "parkour": 0.0,         # 0.2
                         "parkour_hurdle": 0.0,  # 0.2
-                        "parkour_flat": 0.2,
+                        "parkour_flat": 0.0,
                         "parkour_step": 0.0,    # 0.2
                         "parkour_gap": 0.0,     # 0.2
                         "demo": 0.0}            # 0.2
@@ -328,6 +328,9 @@ class LeggedRobotCfg(BaseConfig):
             dof_error = -0.04
             feet_stumble = -1
             feet_edge = -1
+            
+            # 根据HIMLOCO新加的奖励函数
+            base_height = -0.2
             
         only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
         tracking_sigma = 0.2 # tracking reward = exp(-error^2/sigma)

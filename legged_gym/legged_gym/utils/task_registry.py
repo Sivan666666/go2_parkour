@@ -90,11 +90,15 @@ class TaskRegistry():
             # load config files
             env_cfg, _ = self.get_cfgs(name)
         # override cfg from args (if specified)
+        # print(env_cfg.terrain.terrain_dict["demo"])
+        # print(env_cfg.terrain.terrain_dict["normal stairs up"])
         env_cfg, _ = update_cfg_from_args(env_cfg, None, args)
         set_seed(env_cfg.seed)
         # parse sim params (convert to dict first)
         sim_params = {"sim": class_to_dict(env_cfg.sim)}
         sim_params = parse_sim_params(args, sim_params)
+        # print(env_cfg.terrain.terrain_dict["demo"])
+        # print(env_cfg.terrain.terrain_dict["normal stairs up"])
         env = task_class(   cfg=env_cfg,
                             sim_params=sim_params,
                             physics_engine=args.physics_engine,

@@ -311,6 +311,7 @@ class OnPolicyRunner:
             depth_actor_loss, yaw_loss = self.alg.update_depth_actor(actions_student_buffer, actions_teacher_buffer, yaw_buffer_student, yaw_buffer_teacher)
 
             # depth_encoder_loss, depth_actor_loss = self.alg.update_depth_both(depth_latent_buffer, scandots_latent_buffer, actions_student_buffer, actions_teacher_buffer)
+            # yaw_loss = 0.0
             stop = time.time()
             learn_time = stop - start
 

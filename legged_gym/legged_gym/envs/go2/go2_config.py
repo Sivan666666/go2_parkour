@@ -131,7 +131,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         far_clip = 2
 
         # 噪声总开关
-        enable_noise = True
+        enable_noise = False
         dis_noise = 0.0
 
         # 1. Clip: 近距离设为无穷
@@ -178,7 +178,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
     class rewards( LeggedRobotCfg.rewards ):
         soft_dof_pos_limit = 0.9
-        base_height_target = 0.25
+        base_height_target = 0.3
 
     # class rewards( LeggedRobotCfg.rewards ):
     #     class scales:

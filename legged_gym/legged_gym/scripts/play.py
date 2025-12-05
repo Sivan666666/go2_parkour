@@ -191,45 +191,88 @@ def play(args):
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
+    show_plots = False # 改为 False 关闭所有绘图
+    # 历史
+    cmd_vx_hist, act_vx_hist, base_h_hist = [], [], []
+    yaw_hist, yaw_cmd_hist, pos_x_hist, pos_y_hist = [], [], [], []
+
+    # 子图初始化：两张图
+    if show_plots:
+        try:
+            import matplotlib.pyplot as plt
+            plt.ion()
+            # 图1：速度 + 高度（两行）
+            fig1, (ax_v, ax_h) = plt.subplots(2, 1, num=777, figsize=(8, 6), sharex=True)
+            ax_v.set_title("Velocity (lookat env)"); ax_v.set_ylabel("vx (m/s)")
+            line_cmd, = ax_v.plot([], [], label='cmd vx', color='tab:red')
+            line_act, = ax_v.plot([], [], label='actual vx', color='tab:blue')
+            ax_v.legend(); ax_v.grid(True, alpha=0.3)
+            ax_h.set_title("Base height (lookat env)")
+            ax_h.set_xlabel("Step"); ax_h.set_ylabel("height (m)")
+            line_bh, = ax_h.plot([], [], label='base_height', color='tab:green')
+            ax_h.legend(); ax_h.grid(True, alpha=0.3)
+
+            # 图2：yaw + 位置（3行：yaw、x、y）
+            fig2, (ax_yaw, ax_px, ax_py) = plt.subplots(3, 1, num=778, figsize=(8, 9), sharex=True)
+            ax_yaw.set_title("Yaw angle & command (lookat env)")
+            ax_yaw.set_ylabel("yaw (rad)")
+            line_yaw, = ax_yaw.plot([], [], label='yaw', color='tab:purple')
+            line_yaw_cmd, = ax_yaw.plot([], [], label='yaw_cmd', color='tab:orange')
+            ax_yaw.legend(); ax_yaw.grid(True, alpha=0.3)
+            ax_px.set_title("Base position X"); ax_px.set_ylabel("x (m)")
+            line_px, = ax_px.plot([], [], label='x', color='tab:brown')
+            ax_px.legend(); ax_px.grid(True, alpha=0.3)
+            ax_py.set_title("Base position Y"); ax_py.set_xlabel("Step"); ax_py.set_ylabel("y (m)")
+            line_py, = ax_py.plot([], [], label='y', color='tab:cyan')
+            ax_py.legend(); ax_py.grid(True, alpha=0.3)
+        except Exception:
+            show_plots = False
+            fig1 = fig2 = ax_v = ax_h = ax_yaw = ax_px = ax_py = None
+            line_cmd = line_act = line_bh = line_yaw = line_yaw_cmd = line_px = line_py = None
+    else:
+        fig1 = fig2 = ax_v = ax_h = ax_yaw = ax_px = ax_py = None
+        line_cmd = line_act = line_bh = line_yaw = line_yaw_cmd = line_px = line_py = None
+
+
     for i in range(10*int(env.max_episode_length)):
         # # 强制设置 yaw 相关命令为0，保持直线行走
         # env.commands[:, 2] = 0.0  # yaw rate command 设为0
         
         # # 如果你想保持特定的前进方向，可以设置：
         env.commands[:, 0] = 0.5  # forward velocity
-        env.commands[:, 2] = 0.5  # lateral velocity
+        # env.commands[:, 2] = 0.5  # lateral velocity
 
-
-        if args.use_jit:
-            if env.cfg.depth.use_camera:
-                if infos["depth"] is not None:
-                    depth_latent = torch.ones((env_cfg.env.num_envs, 32), device=env.device)
-                    actions, depth_latent = policy_jit(obs.detach(), True, infos["depth"], depth_latent)
+        with torch.no_grad():
+            if args.use_jit:
+                if env.cfg.depth.use_camera:
+                    if infos["depth"] is not None:
+                        depth_latent = torch.ones((env_cfg.env.num_envs, 32), device=env.device)
+                        actions, depth_latent = policy_jit(obs.detach(), True, infos["depth"], depth_latent)
+                    else:
+                        depth_buffer = torch.ones((env_cfg.env.num_envs, 58, 87), device=env.device)
+                        actions, depth_latent = policy_jit(obs.detach(), False, depth_buffer, depth_latent)
                 else:
-                    depth_buffer = torch.ones((env_cfg.env.num_envs, 58, 87), device=env.device)
-                    actions, depth_latent = policy_jit(obs.detach(), False, depth_buffer, depth_latent)
+                    obs_jit = torch.cat((obs.detach()[:, :env_cfg.env.n_proprio+env_cfg.env.n_priv], obs.detach()[:, -env_cfg.env.history_len*env_cfg.env.n_proprio:]), dim=1)
+                    actions = policy(obs_jit)
             else:
-                obs_jit = torch.cat((obs.detach()[:, :env_cfg.env.n_proprio+env_cfg.env.n_priv], obs.detach()[:, -env_cfg.env.history_len*env_cfg.env.n_proprio:]), dim=1)
-                actions = policy(obs_jit)
-        else:
-            if env.cfg.depth.use_camera:
-                if infos["depth"] is not None:
-                    obs_student = obs[:, :env.cfg.env.n_proprio].clone()
-                    obs_student[:, 6:8] = 0
-                    depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
-                    depth_latent = depth_latent_and_yaw[:, :-2]
-                    yaw = depth_latent_and_yaw[:, -2:] * 0
-                # 不使用 yaw 修正，保持原始观测
-                obs[:, 6:8] = 1.5*yaw  # 注释掉这行
-                #obs[:, 6:8] = 0  # 强制设为0
-                    
-            else:
-                depth_latent = None
-            # obs[:, 6:8] = 0  # 强制设为0
-            if hasattr(ppo_runner.alg, "depth_actor"):
-                actions = ppo_runner.alg.depth_actor(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
-            else:
-                actions = policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
+                if env.cfg.depth.use_camera:
+                    if infos["depth"] is not None:
+                        obs_student = obs[:, :env.cfg.env.n_proprio].clone()
+                        obs_student[:, 6:8] = 0
+                        depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
+                        depth_latent = depth_latent_and_yaw[:, :-2]
+                        yaw = depth_latent_and_yaw[:, -2:] * 0
+                    # 不使用 yaw 修正，保持原始观测
+                    obs[:, 6:8] = 1.5*yaw  # 注释掉这行
+                    obs[:, 6:8] = 0  # 强制设为0
+                        
+                else:
+                    depth_latent = None
+                # obs[:, 6:8] = 0  # 强制设为0
+                if hasattr(ppo_runner.alg, "depth_actor"):
+                    actions = ppo_runner.alg.depth_actor(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
+                else:
+                    actions = policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
             
         obs, _, rews, dones, infos = env.step(actions.detach())
         if args.web:
@@ -237,6 +280,51 @@ def play(args):
                         step_graphics=True,
                         render_all_camera_sensors=True,
                         wait_for_page_load=True)
+            
+        # 记录
+        look_id = env.lookat_id
+        cmd_vx = env.commands[look_id, 0].item()
+        act_vx = env.base_lin_vel[look_id, 0].item()
+        base_h = env._get_base_heights()[look_id].item()
+        cmd_vx_hist.append(cmd_vx); act_vx_hist.append(act_vx); base_h_hist.append(base_h)
+
+        # 实际 yaw（由四元数转 yaw）
+        q = env.base_quat[look_id]
+        x, y, z, w = q[0].item(), q[1].item(), q[2].item(), q[3].item()
+        denom = 1.0 - 2.0*(y*y + z*z)
+        yaw = np.arctan2(2.0*(w*z + x*y), denom)
+        yaw_hist.append(float(yaw))
+
+        # 观测中的 delta_yaw（目标-当前），换成期望 yaw 便于对比
+        delta_yaw = 0 # 实际给了0
+        print("delta_yaw (obs[6]):", delta_yaw)
+        yaw_desired = yaw + delta_yaw
+        yaw_cmd_hist.append(yaw_desired)
+
+        # 位置
+        pos_x_hist.append(env.root_states[look_id, 0].item())
+        pos_y_hist.append(env.root_states[look_id, 1].item())
+
+        # 刷新图1
+        if show_plots and ax_v is not None:
+            line_cmd.set_data(range(len(cmd_vx_hist)), cmd_vx_hist)
+            line_act.set_data(range(len(act_vx_hist)), act_vx_hist)
+            ax_v.relim(); ax_v.autoscale_view()
+            line_bh.set_data(range(len(base_h_hist)), base_h_hist)
+            ax_h.relim(); ax_h.autoscale_view()
+            fig1.canvas.draw_idle(); fig1.canvas.flush_events()
+
+        # 刷新图2（yaw + 位置）
+        if show_plots and ax_yaw is not None:
+            line_yaw.set_data(range(len(yaw_hist)), yaw_hist)
+            line_yaw_cmd.set_data(range(len(yaw_cmd_hist)), yaw_cmd_hist)  # 这里是 obs[:,6] 的曲线
+            ax_yaw.relim(); ax_yaw.autoscale_view()
+            line_px.set_data(range(len(pos_x_hist)), pos_x_hist)
+            line_py.set_data(range(len(pos_y_hist)), pos_y_hist)
+            ax_px.relim(); ax_px.autoscale_view()
+            ax_py.relim(); ax_py.autoscale_view()
+            fig2.canvas.draw_idle(); fig2.canvas.flush_events()
+
         print("time:", env.episode_length_buf[env.lookat_id].item() / 50, 
               "cmd vx", env.commands[env.lookat_id, 0].item(),
               "actual vx", env.base_lin_vel[env.lookat_id, 0].item(), )
