@@ -88,7 +88,7 @@ class LeggedRobotCfg(BaseConfig):
 
     class depth:
         use_camera = False
-        camera_num_envs = 192
+        camera_num_envs = 1
         camera_terrain_num_rows = 10
         camera_terrain_num_cols = 40
 
