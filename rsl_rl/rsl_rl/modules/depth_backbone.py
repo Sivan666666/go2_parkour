@@ -1140,16 +1140,18 @@ class DepthAnythingTensorWrapper(nn.Module):
         
         # 变换维度: [B, 3, H, W] -> [B, H, W, 3]
         imgs_nhwc = rgb_images.permute(0, 2, 3, 1)
-        
         # 转换到 CPU Numpy
         # 乘 255 转成标准图像格式 (uint8)
         t_start_1 = time.time()
         imgs_np = (imgs_nhwc * 255.0).detach().cpu().numpy().astype(np.uint8)
+        # imgs_np = (rgb_images * 255.0).detach().cpu().numpy().astype(np.uint8)
+        # imgs_np = (imgs_nhwc).detach().cpu().numpy()
+        imgs_show = (imgs_nhwc * 255.0).detach().cpu().numpy().astype(np.uint8)
         print(f"Tensor -> Numpy conversion time: {time.time() - t_start_1:.6f} s")
 
         # --- RGB Visualization Start ---
-        if imgs_np is not None and len(imgs_np) > 0:
-            rgb_vis = imgs_np[0]
+        if imgs_show is not None and len(imgs_show) > 0:
+            rgb_vis = imgs_show[0]
             bgr_vis = cv2.cvtColor(rgb_vis, cv2.COLOR_RGB2BGR)
             cv2.imshow("Input RGB", bgr_vis)
             cv2.waitKey(1)
@@ -1162,10 +1164,10 @@ class DepthAnythingTensorWrapper(nn.Module):
         # ---------------------------------------------------------------------
         # 2. 调用官方 API
         # ---------------------------------------------------------------------
-        # inference() 内部会自动处理 resize (默认 504), normalize, batching 等
+        # inference() 内部会自动处理 resize , normalize, batching 等
         try:
             # 显式指定 process_res 以匹配训练推理一致性
-            prediction = self.api_wrapper.inference(image=image_list, process_res=98)
+            prediction = self.api_wrapper.inference(image=image_list, process_res=630)
         except TypeError as e:
             if "NoneType" in str(e):
                 print("❌ CRITICAL: The patch failed. The model config is still broken.")

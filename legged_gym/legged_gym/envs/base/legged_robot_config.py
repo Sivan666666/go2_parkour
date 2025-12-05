@@ -88,7 +88,7 @@ class LeggedRobotCfg(BaseConfig):
 
     class depth:
         use_camera = False
-        camera_num_envs = 1
+        camera_num_envs = 192
         camera_terrain_num_rows = 10
         camera_terrain_num_cols = 40
 
@@ -192,8 +192,8 @@ class LeggedRobotCfg(BaseConfig):
         terrain_dict = {"smooth slope": 0., 
                         "rough slope up": 0.0,
                         "rough slope down": 0.0,
-                        "normal stairs DOWN": 0.2,
-                        "normal stairs UP": 0.2,
+                        "normal stairs DOWN": 0.,
+                        "normal stairs UP": 0.4,
                         "discrete": 0., 
                         "stepping stones": 0.0,
                         "gaps": 0., 
@@ -201,8 +201,8 @@ class LeggedRobotCfg(BaseConfig):
                         "pit": 0.0,
                         "wall": 0.0,
                         "platform": 0.,
-                        "hollow stairs DOWN": 0.2, 
-                        "hollow stairs UP": 0.2,
+                        "hollow stairs DOWN": 0., 
+                        "hollow stairs UP": 0.4,
                         "parkour": 0.0,         # 0.2
                         "parkour_hurdle": 0.0,  # 0.2
                         "STRAIGHT flat": 0.2,

@@ -1192,8 +1192,8 @@ class LeggedRobot(BaseTask):
             # 2. Resize
             # permute(2,0,1) -> [3, H, W] 适合 TorchVision Resize
             # resize_transform 后再 permute(1,2,0) -> [H, W, 3] 存入 buffer
-            rgb_image = self.crop_depth_image(rgb_image)
-            rgb_image = self.resize_transform(rgb_image.permute(2, 0, 1)).permute(1, 2, 0)
+            # rgb_image = self.crop_depth_image(rgb_image)
+            # rgb_image = self.resize_transform(rgb_image.permute(2, 0, 1)).permute(1, 2, 0)
             # 3. 处理 Depth 图像 (保持不变)
             depth_image = gymtorch.wrap_tensor(depth_image_)
             depth_image = self.process_depth_image(depth_image, i)
@@ -1835,8 +1835,8 @@ class LeggedRobot(BaseTask):
                                             self.cfg.depth.resized[0]).to(self.device)
             self.rgb_buffer = torch.zeros(self.num_envs,  
                                           self.cfg.depth.buffer_len, 
-                                          self.cfg.depth.resized[1], 
-                                          self.cfg.depth.resized[0],
+                                          480, 
+                                          640,
                                           3,).to(self.device)
 
     def _prepare_reward_function(self):
