@@ -586,6 +586,7 @@ class LeggedRobot(BaseTask):
         self.init_done = False
         self._parse_cfg(self.cfg)
 
+        self._obs_layout_printed = False  # 首次打印标志
         # 🔥 初始化柏林噪声生成器
         self.perlin_time_offset = 0.0
         # 🔥 初始化柏林噪声生成器 (GPU 版本)
@@ -1120,6 +1121,23 @@ class LeggedRobot(BaseTask):
         if self.global_counter % 5 == 0:
             self.delta_yaw = self.target_yaw - self.yaw
             self.delta_next_yaw = self.next_target_yaw - self.yaw
+        # 逐项构造，便于打印
+        obs_parts = [
+            ("base_ang_vel*scale", self.base_ang_vel * self.obs_scales.ang_vel, "机体角速度(wx, wy, wz)缩放"),
+            ("imu_obs(roll,pitch)", imu_obs, "IMU姿态(横滚、俯仰)"),
+            ("zero_delta_yaw", 0*self.delta_yaw[:, None], "占位的yaw误差(恒为0)"),
+            ("delta_yaw", self.delta_yaw[:, None], "当前目标航向与实际航向的偏差"),
+            ("delta_next_yaw", self.delta_next_yaw[:, None], "下一目标点的航向偏差"),
+            ("zero_lin_cmd_xy", 0*self.commands[:, 0:2], "占位的命令(vy,yaw)恒为0"),
+            ("cmd_vx", self.commands[:, 0:1], "线速度命令vx"),
+            ("env_class!=17", (self.env_class != 17).float()[:, None], "地形标签：非类17"),
+            ("env_class==17", (self.env_class == 17).float()[:, None], "地形标签：类17"),
+            ("dof_pos_err*scale(reindexed)", self.reindex((self.dof_pos - self.default_dof_pos_all) * self.obs_scales.dof_pos), "关节位置相对误差"),
+            ("dof_vel*scale(reindexed)", self.reindex(self.dof_vel * self.obs_scales.dof_vel), "关节速度"),
+            ("last_action(reindexed)", self.reindex(self.action_history_buf[:, -1]), "上一时刻动作"),
+            ("feet_contact(centered,reindexed)", self.reindex_feet(self.contact_filt.float()-0.5), "足端接触状态")
+        ]
+
         obs_buf = torch.cat((#skill_vector, 
                             self.base_ang_vel  * self.obs_scales.ang_vel,   #[1,3]
                             imu_obs,    #[1,2]
@@ -1167,6 +1185,51 @@ class LeggedRobot(BaseTask):
                 self.contact_filt.float().unsqueeze(1)
             ], dim=1)
         )
+
+        # 一次性打印观测构成（表格样式）
+        if not self._obs_layout_printed:
+            rows = []
+            for idx, (name, tensor, meaning) in enumerate(obs_parts):
+                per_env_shape = tuple(tensor.shape[1:])  # 去掉 num_envs
+                rows.append((idx, name, str(per_env_shape), meaning))
+
+            # 追加私有与历史项
+            per_env_priv_explicit = tuple(priv_explicit.shape[1:])
+            per_env_priv_latent = tuple(priv_latent.shape[1:])
+            rows.append(("", "priv_explicit", str(per_env_priv_explicit), "显式私有(线速度3+占位6)"))
+            rows.append(("", "priv_latent", str(per_env_priv_latent), "潜在私有(质量、摩擦、马达强度)"))
+            if self.cfg.terrain.measure_heights:
+                heights_shape = (self.measured_heights.shape[1],)
+                rows.append(("", "heights", str(heights_shape), "高度采样(启用)"))
+            else:
+                rows.append(("", "heights", "excluded", "高度采样(未启用)"))
+            rows.append(("", "obs_history_buf(flatten)", f"({self.cfg.env.history_len*self.cfg.env.n_proprio},)", "历史观测展开"))
+            rows.append(("", "TOTAL obs_buf", f"({self.obs_buf.shape[1]},)", "策略输入总维度(单env)"))
+
+            # 计算列宽
+            headers = ("Index", "Name", "Shape", "Meaning")
+            data = [headers] + [(str(a), str(b), str(c), str(d)) for (a, b, c, d) in rows]
+            col_w = [max(len(row[i]) for row in data) for i in range(4)]
+
+            # 画横线
+            def hline():
+                return "+" + "+".join("-"*(w+2) for w in col_w) + "+"
+
+            # 打印
+            print(hline())
+            header_row = "|" + "|".join(f" {headers[i].ljust(col_w[i])} " for i in range(4)) + "|"
+            print(header_row)
+            print(hline())
+            for (a, b, c, d) in data[1:]:
+                line = "|" + "|".join([
+                    f" {a.ljust(col_w[0])} ",
+                    f" {b.ljust(col_w[1])} ",
+                    f" {c.ljust(col_w[2])} ",
+                    f" {d.ljust(col_w[3])} ",
+                ]) + "|"
+                print(line)
+            print(hline())
+            self._obs_layout_printed = True
         
         
     def get_noisy_measurement(self, x, scale):

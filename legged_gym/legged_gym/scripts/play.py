@@ -118,16 +118,16 @@ def play(args):
     #                                 "rough slope up": 0.0,
     #                                 "rough slope down": 0.0,
     #                                 "normal stairs up": 0.0,
-    #                                 "normal stairs down": 0.4,
+    #                                 "normal stairs down": 0.5,
     #                                 "discrete": 0., 
     #                                 "stepping stones": 0.0,
     #                                 "gaps": 0., 
-    #                                 "flat": 0.2,
+    #                                 "flat": 0.0,
     #                                 "pit": 0.0,
     #                                 "wall": 0.0,
     #                                 "platform": 0.,
     #                                 "hollow stairs up": 0.0, 
-    #                                 "hollow stairs down": 0.4,
+    #                                 "hollow stairs down": 0.5,
     #                                 "parkour": 0.0,         # 0.2
     #                                 "parkour_hurdle": 0.0,  # 0.2
     #                                 "parkour_flat": 0.,
@@ -191,7 +191,7 @@ def play(args):
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
-    show_plots = False # 改为 False 关闭所有绘图
+    show_plots = True # 改为 False 关闭所有绘图
     # 历史
     cmd_vx_hist, act_vx_hist, base_h_hist = [], [], []
     yaw_hist, yaw_cmd_hist, pos_x_hist, pos_y_hist = [], [], [], []
@@ -264,7 +264,9 @@ def play(args):
                         yaw = depth_latent_and_yaw[:, -2:] * 0
                     # 不使用 yaw 修正，保持原始观测
                     obs[:, 6:8] = 1.5*yaw  # 注释掉这行
-                    obs[:, 6:8] = 0  # 强制设为0
+                    obs[:, 6:8] = -env.yaw.unsqueeze(1)  # [num_envs, 2] 两列都填 -yaw  # 强制设为0
+                    # obs[:, 6:8] = 0
+                
                         
                 else:
                     depth_latent = None
@@ -296,8 +298,8 @@ def play(args):
         yaw_hist.append(float(yaw))
 
         # 观测中的 delta_yaw（目标-当前），换成期望 yaw 便于对比
-        delta_yaw = 0 # 实际给了0
-        print("delta_yaw (obs[6]):", delta_yaw)
+        delta_yaw = -env.yaw[look_id].item()  # 与 obs[:,6] 一致
+        # print("delta_yaw (=-yaw):", delta_yaw)
         yaw_desired = yaw + delta_yaw
         yaw_cmd_hist.append(yaw_desired)
 

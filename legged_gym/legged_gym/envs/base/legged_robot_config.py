@@ -330,7 +330,7 @@ class LeggedRobotCfg(BaseConfig):
             feet_edge = -1
             
             # 根据HIMLOCO新加的奖励函数
-            base_height = -0.2
+            # base_height = -0.2
             
         only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
         tracking_sigma = 0.2 # tracking reward = exp(-error^2/sigma)

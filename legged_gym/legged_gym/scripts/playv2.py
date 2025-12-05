@@ -93,26 +93,26 @@ def play(args):
     #                                 "parkour_step": 0.2,
     #                                 "parkour_gap": 0.2, 
     #                                 "demo": 0.}
-    env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-                                    "rough slope up": 0.,
-                                    "rough slope down": 0.0,
-                                    "rough stairs up": 0., 
-                                    "rough stairs down": 0., 
-                                    "discrete": 0., 
-                                    "stepping stones": 0.0,
-                                    "gaps": 0., 
-                                    "smooth flat": 0,
-                                    "pit": 0.0,
-                                    "wall": 0.0,
-                                    "platform": 0.,
-                                    "large stairs up": 0.,
-                                    "large stairs down": 0.,
-                                    "parkour": 0.0,
-                                    "parkour_hurdle": 0.0,
-                                    "parkour_flat": 0.0,
-                                    "parkour_step": 1.,
-                                    "parkour_gap": 0.0, 
-                                    "demo": 0.}
+    # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
+    #                                 "rough slope up": 0.,
+    #                                 "rough slope down": 0.0,
+    #                                 "rough stairs up": 0., 
+    #                                 "rough stairs down": 0., 
+    #                                 "discrete": 0., 
+    #                                 "stepping stones": 0.0,
+    #                                 "gaps": 0., 
+    #                                 "smooth flat": 0,
+    #                                 "pit": 0.0,
+    #                                 "wall": 0.0,
+    #                                 "platform": 0.,
+    #                                 "large stairs up": 0.,
+    #                                 "large stairs down": 0.,
+    #                                 "parkour": 0.0,
+    #                                 "parkour_hurdle": 0.0,
+    #                                 "parkour_flat": 0.0,
+    #                                 "parkour_step": 1.,
+    #                                 "parkour_gap": 0.0, 
+    #                                 "demo": 0.}
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
@@ -123,8 +123,8 @@ def play(args):
     env_cfg.depth.position =  [0.355, 0, 0.065]
     env_cfg.depth.angle = [20, 21]
 
-    env_cfg.depth.position = [0.3, 0, 0.147]  # front camera 
-    env_cfg.depth.angle = [29-1, 29+1]  # positive pitch down  #27-5,27+5
+    env_cfg.depth.position = [0.35, 0, 0.147]  # front camera 
+    env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
 
     # for go2
         # position = [0.3, 0, 0.08] # front camera 002-g2-camera 
@@ -221,6 +221,7 @@ def play(args):
                     # 不使用 yaw 修正,保持原始观测
                     obs[:, 6:8] = 1.5*yaw  # 注释掉这行
                     #obs[:, 6:8] = 0  # 强制设为0
+                    obs[:, 6:8] = -env.yaw.unsqueeze(1)
                         
                 else:
                     depth_latent = None
