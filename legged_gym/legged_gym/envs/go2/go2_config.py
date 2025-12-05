@@ -109,7 +109,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         # # helpful doggy
         position = [0.35, 0, 0.147]  # front camera
         position_rand = 0.02  
-        angle = [45-5, 45+5]  # positive pitch down  #27-5,27+5
+        angle = [30-5, 30+5]  # positive pitch down  #27-5,27+5
         z_angle = [-2, 2]
         x_angle = [-2, 2]
         # our designed position
@@ -121,6 +121,10 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         original = (60, 106)
         resized = (58, 87)
+
+        original = (106, 60)
+        resized = (87, 58)
+
         # 🔥 Horizontal FOV 域随机化
         horizontal_fov = 87  # 基准值
         horizontal_fov_range = [86, 87, 88]   # 随机范围 86-88 度
