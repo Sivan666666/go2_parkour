@@ -102,7 +102,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
     class depth( LeggedRobotCfg.depth ):
         use_camera = False
-        camera_num_envs = 192
+        camera_num_envs = 1
         camera_terrain_num_rows = 10
         camera_terrain_num_cols = 20
 
@@ -122,7 +122,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         original = (60, 106)
         resized = (58, 87)
 
-        original = (106, 60)
+        original = (640, 480)
         resized = (87, 58)
 
         # 🔥 Horizontal FOV 域随机化
