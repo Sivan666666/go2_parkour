@@ -56,8 +56,61 @@ class Terrain:
         self.env_length = cfg.terrain_length
         self.env_width = cfg.terrain_width
 
+        # 打印地形分布（名称+累计比例）、行列数与 horizontal_scale
+        terrain_names = [
+            "smooth slope",
+            "rough slope up",
+            "rough slope down",
+            "normal stairs down",
+            "normal stairs up",
+            "discrete",
+            "stepping stones",
+            "gaps",
+            "flat",
+            "pit",
+            "wall",
+            "platform",
+            "hollow stairs down",
+            "hollow stairs up",
+            "parkour",
+            "parkour_hurdle",
+            "parkour_flat",
+            "parkour_step",
+            "parkour_gap",
+            "demo",
+        ]
         cfg.terrain_proportions = np.array(cfg.terrain_proportions) / np.sum(cfg.terrain_proportions)
         self.proportions = [np.sum(cfg.terrain_proportions[:i+1]) for i in range(len(cfg.terrain_proportions))]
+
+        print("=== Terrain setup ===")
+        print(f"- grid rows x cols: {cfg.num_rows} x {cfg.num_cols}")
+        print(f"- horizontal_scale: {cfg.horizontal_scale}")
+
+        # 表格打印 terrain proportions（保留1位小数）
+        headers = ("Index", "Name", "Proportion")
+        rows = []
+        for i, p in enumerate(cfg.terrain_proportions):
+            name = terrain_names[i] if i < len(terrain_names) else f"type_{i}"
+            rows.append((str(i), name, f"{p:.1f}"))
+
+        # 计算列宽
+        data = [headers] + rows
+        col_w = [max(len(row[c]) for row in data) for c in range(3)]
+        def hline():
+            return "+" + "+".join("-"*(w+2) for w in col_w) + "+"
+
+        print("- terrain proportions:")
+        print(hline())
+        print("| " + headers[0].ljust(col_w[0]) + " | " +
+                    headers[1].ljust(col_w[1]) + " | " +
+                    headers[2].ljust(col_w[2]) + " |")
+        print(hline())
+        for r in rows:
+            print("| " + r[0].ljust(col_w[0]) + " | " +
+                        r[1].ljust(col_w[1]) + " | " +
+                        r[2].rjust(col_w[2]) + " |")
+        print(hline())
+
         self.cfg.num_sub_terrains = cfg.num_rows * cfg.num_cols
         self.env_origins = np.zeros((cfg.num_rows, cfg.num_cols, 3))
         self.terrain_type = np.zeros((cfg.num_rows, cfg.num_cols))
@@ -396,7 +449,7 @@ class Terrain:
             self.heightsamples[start_x: end_x, start_y:end_y] = terrain.height_field_raw
 
         if hasattr(terrain, 'trimeshes') and terrain.trimeshes:
-            print(f">>> DEBUG: Found {len(terrain.trimeshes)} meshes from sub-terrain ({row}, {col}). Collecting them.")
+            # print(f">>> DEBUG: Found {len(terrain.trimeshes)} meshes from sub-terrain ({row}, {col}). Collecting them.")
             
             origin_x_m = i * self.env_length
             origin_y_m = j * self.env_width
@@ -728,9 +781,9 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
     
     # platform_size_px = tmp - birth_area_length_px
 
-    print("birth_area_length_px:", birth_area_length_px)
-    print("platform_size_px:", platform_size_px)
-    print("staircase_length_px:", staircase_length_px)
+    # print("birth_area_length_px:", birth_area_length_px)
+    # print("platform_size_px:", platform_size_px)
+    # print("staircase_length_px:", staircase_length_px)
     if staircase_length_px <= platform_size_px + birth_area_length_px or num_steps <= 0:
         print("Warning: Staircase configuration invalid. Generating flat terrain.")
         terrain.goals = np.zeros((num_goals, 3))
@@ -870,7 +923,7 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
     terrain.goals = np.array(goals_m)
 
     terrain.heightsamples[:, :] = heightsamples[:, :]
-    print("1111111111111111111111111111111111111111111111111111111111111111111")
+    # print("1111111111111111111111111111111111111111111111111111111111111111111")
     return terrain
 
 

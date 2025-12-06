@@ -145,7 +145,7 @@ def play(args):
     # env_cfg.depth.angle = [20, 21]
 
     # env_cfg.depth.position = [0.35, 0, 0.147]  # front camera 
-    env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
+    env_cfg.depth.angle = [45-1, 45+1]  # positive pitch down  #27-5,27+5
 
     # for go2
         # position = [0.3, 0, 0.08] # front camera 002-g2-camera 
@@ -191,7 +191,7 @@ def play(args):
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
-    show_plots = True # 改为 False 关闭所有绘图
+    show_plots = False # 改为 False 关闭所有绘图
     # 历史
     cmd_vx_hist, act_vx_hist, base_h_hist = [], [], []
     yaw_hist, yaw_cmd_hist, pos_x_hist, pos_y_hist = [], [], [], []

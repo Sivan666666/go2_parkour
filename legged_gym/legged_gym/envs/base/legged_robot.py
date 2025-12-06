@@ -1024,8 +1024,8 @@ class LeggedRobot(BaseTask):
         """ Check if environments need to be reset
         """
         self.reset_buf = torch.zeros((self.num_envs, ), dtype=torch.bool, device=self.device)
-        roll_cutoff = torch.abs(self.roll) > 1.0
-        pitch_cutoff = torch.abs(self.pitch) > 1.0
+        roll_cutoff = torch.abs(self.roll) > 1.5
+        pitch_cutoff = torch.abs(self.pitch) > 1.5
         reach_goal_cutoff = self.cur_goal_idx >= self.cfg.terrain.num_goals
         # height_cutoff = self.root_states[:, 2] < -0.25
 
@@ -1707,10 +1707,10 @@ class LeggedRobot(BaseTask):
                     # 只打印第一个台阶的信息，避免刷屏
                     print(f">>> DEBUG: Adding first step mesh. It has {vertices.shape[0]} vertices.")
                     # 打印第一个顶点的坐标，看看Z值是不是大于0
-                    print(f"    First vertex coordinate: {vertices[0]}")
+                    # print(f"    First vertex coordinate: {vertices[0]}")
                     # 打印中心点坐标，看看它的大概位置
                     center_coord = np.mean(vertices, axis=0)
-                    print(f"    Approximate center: {center_coord}")
+                    # print(f"    Approximate center: {center_coord}")
 
                 # 将一个台阶添加到仿真中
                 self.gym.add_triangle_mesh(self.sim, vertices.flatten(order='C'), triangles.flatten(order='C'), step_tm_params)
