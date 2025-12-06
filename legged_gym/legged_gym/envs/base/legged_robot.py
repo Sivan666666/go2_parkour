@@ -1472,7 +1472,8 @@ class LeggedRobot(BaseTask):
             return
         
         dis_to_origin = torch.norm(self.root_states[env_ids, :2] - self.env_origins[env_ids, :2], dim=1)
-        threshold = self.commands[env_ids, 0] * self.cfg.env.episode_length_s
+        threshold = self.commands[env_ids, 0] * self.cfg.env.episode_length_s 
+        # threshold = 6
         move_up =dis_to_origin > 0.8*threshold
         move_down = dis_to_origin < 0.4*threshold
 
