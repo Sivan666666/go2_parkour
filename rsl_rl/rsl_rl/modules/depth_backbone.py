@@ -1093,15 +1093,16 @@ class DepthOnlyFCBackbone58x87_XYH(nn.Module):
 
 
 class DepthAnythingTensorWrapper(nn.Module):
-    def __init__(self, encoder="da3metric-large", device="cuda"):
+    def __init__(self, encoder="depth-anything/DA3METRIC-LARGE", device="cuda"):
         super().__init__()
         print(f"Loading Depth Anything V3 (Model: {encoder}) via Standard API...")
         
         try:
             # 1. 初始化官方 API 包装器
-            self.api_wrapper = DepthAnything3(model_name=encoder).to(device)
+            self.api_wrapper = DepthAnything3.from_pretrained(encoder).to(device)
         except KeyError:
             print(f"❌ Error: Model '{encoder}' key not found. Trying fallback...")
+            self.api_wrapper = DepthAnything3.from_pretrained(model_name="da3metric-large").to(device)
         except Exception as e:
             print(f"❌ Error loading DA3: {e}")
             raise e
