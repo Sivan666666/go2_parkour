@@ -257,7 +257,7 @@ class Terrain:
             # step_width: difficulty=0时为0.4m，difficulty=1时为0.2m
             step_width = 0.4 - 0.2 * difficulty
 
-            staircase_length = 8.0  # 总楼梯区长度
+            staircase_length = 10.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
             # 计算顶部平台长度
             platform_size = staircase_length - birth_area_length - step_width * num_steps
@@ -335,7 +335,7 @@ class Terrain:
             # step_width: difficulty=0时为0.4m，difficulty=1时为0.2m
             step_width = 0.4 - 0.2 * difficulty
 
-            staircase_length = 8.0  # 总楼梯区长度
+            staircase_length = 10.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
             # 计算顶部平台长度
             platform_size = staircase_length - birth_area_length - step_width * num_steps

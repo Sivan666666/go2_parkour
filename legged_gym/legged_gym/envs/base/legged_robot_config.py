@@ -51,7 +51,7 @@ class LeggedRobotCfg(BaseConfig):
         num_actions = 12
         env_spacing = 3.  # not used with heightfields/trimeshes 
         send_timeouts = True # send time out information to the algorithm
-        episode_length_s = 15 # episode length in seconds
+        episode_length_s = 20 # episode length in seconds
         obs_type = "og"
 
 
@@ -192,7 +192,7 @@ class LeggedRobotCfg(BaseConfig):
         terrain_dict = {"smooth slope": 0., 
                         "rough slope up": 0.0,
                         "rough slope down": 0.0,
-                        "normal stairs down": 0.0,
+                        "normal stairs down": 0.1,
                         "normal stairs up": 0.4,
                         "discrete": 0., 
                         "stepping stones": 0.0,
@@ -201,7 +201,7 @@ class LeggedRobotCfg(BaseConfig):
                         "pit": 0.0,
                         "wall": 0.0,
                         "platform": 0.,
-                        "hollow stairs down": 0.0, 
+                        "hollow stairs down": 0.1, 
                         "hollow stairs up": 0.4,
                         "parkour": 0.0,         # 0.2
                         "parkour_hurdle": 0.0,  # 0.2
