@@ -73,55 +73,32 @@ def play(args):
     env_cfg.terrain.num_rows = 5
     env_cfg.terrain.num_cols = 5
     env_cfg.terrain.height = [0.02, 0.02]
-    # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-    #                                 "rough slope up": 0.0,
-    #                                 "rough slope down": 0.0,
-    #                                 "rough stairs up": 0., 
-    #                                 "rough stairs down": 0., 
-    #                                 "discrete": 0., 
-    #                                 "stepping stones": 0.0,
-    #                                 "gaps": 0., 
-    #                                 "smooth flat": 0,
-    #                                 "pit": 0.0,
-    #                                 "wall": 0.0,
-    #                                 "platform": 0.,
-    #                                 "large stairs up": 0.,
-    #                                 "large stairs down": 0.,
-    #                                 "parkour": 0.2,
-    #                                 "parkour_hurdle": 0.2,
-    #                                 "parkour_flat": 0.2,
-    #                                 "parkour_step": 0.2,
-    #                                 "parkour_gap": 0.2, 
-    #                                 "demo": 0.}
-    # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-    #                                 "rough slope up": 0.,
-    #                                 "rough slope down": 0.0,
-    #                                 "rough stairs up": 0., 
-    #                                 "rough stairs down": 0., 
-    #                                 "discrete": 0., 
-    #                                 "stepping stones": 0.0,
-    #                                 "gaps": 0., 
-    #                                 "smooth flat": 0,
-    #                                 "pit": 0.0,
-    #                                 "wall": 0.0,
-    #                                 "platform": 0.,
-    #                                 "large stairs up": 0.,
-    #                                 "large stairs down": 0.,
-    #                                 "parkour": 0.0,
-    #                                 "parkour_hurdle": 0.0,
-    #                                 "parkour_flat": 0.0,
-    #                                 "parkour_step": 1.,
-    #                                 "parkour_gap": 0.0, 
-    #                                 "demo": 0.}
+
+    env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
+                        "rough slope up": 0.0,
+                        "rough slope down": 0.0,
+                        "normal stairs down": 0.0,
+                        "normal stairs up": 0.0,
+                        "discrete": 0., 
+                        "stepping stones": 0.0,
+                        "gaps": 0., 
+                        "flat": 0.0,
+                        "pit": 0.0,
+                        "wall": 0.0,
+                        "platform": 0.,
+                        "hollow stairs down": 0.0, 
+                        "hollow stairs up": 1.0,
+                        "parkour": 0.0,         # 0.2
+                        "parkour_hurdle": 0.0,  # 0.2
+                        "parkour_flat": 0.0,
+                        "parkour_step": 0.0,    # 0.2
+                        "parkour_gap": 0.0,     # 0.2
+                        "demo": 0.0}            # 0.2
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
     env_cfg.terrain.max_difficulty = True
-    
-    env_cfg.depth.angle = [0, 1]
-    env_cfg.depth.camera_num_envs = 192
-    env_cfg.depth.position =  [0.355, 0, 0.065]
-    env_cfg.depth.angle = [20, 21]
+
 
     env_cfg.depth.position = [0.35, 0, 0.147]  # front camera 
     env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
@@ -187,7 +164,7 @@ def play(args):
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
-    for i in range(1*int(750)):
+    for i in range(1*int(50)):
         # 1000 * 0.002 = 20s
         # episode length = env_cfg.env.episode_length_s / dt
         # # 强制设置 yaw 相关命令为0，保持直线行走
@@ -368,18 +345,38 @@ def play(args):
         print(f"完成的环境数: {total_count}/{env.num_envs}")
         print(f"成功: {success_count}")
         print(f"失败: {fail_count}")
-        print(f"总体成功率: {100*success_count/env.num_envs:.1f}%")
+        success_rate = 100*success_count/env.num_envs
+        print(f"总体成功率: {success_rate:.1f}%")
         
-        # 打印每个环境的详细状态
-        print("\n各环境状态:")
-        for env_id, status in enumerate(success_rate_buffer):
-            if status is not None:
-                status_str = "✅ 成功" if status else "❌ 失败"
-                print(f"  环境 {env_id}: {status_str}")
-            else:
-                print(f"  环境 {env_id}: ⏸️ 未完成")
+        # 追加写入 evaluation.log（先读再写末尾），地形按行记录，仅记录概率不为0的项，最后加分隔线
+        log_file = os.path.join(log_pth, "evaluation.log")
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+        nonzero_terrain = {k: v for k, v in env_cfg.terrain.terrain_dict.items() if float(v) != 0.0}
+        terrain_lines = "\n".join([f"  {k}: {v:.1f}" for k, v in nonzero_terrain.items()]) if nonzero_terrain else "  none"
+
+        with open(log_file, "a+") as f:
+            f.seek(0); _ = f.read()
+            f.seek(0, os.SEEK_END)
+            f.write(
+                f"exptid={args.exptid}, step={i}, num_envs={env.num_envs}, "
+                f"completed={total_count}, success={success_count}, fail={fail_count}, "
+                f"success_rate={success_rate:.1f}%\n"
+            )
+            f.write("terrain:\n" + terrain_lines + "\n")
+            f.write("="*60 + "\n")
     else:
         print("没有环境完成第一次 episode")
+        # 也记录一次（成功率为0）
+        log_file = os.path.join(log_pth, "evaluation.log")
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        with open(log_file, "a+") as f:
+            f.seek(0); _ = f.read()
+            f.seek(0, os.SEEK_END)
+            f.write(f"exptid={args.exptid}, step={i}, num_envs={env.num_envs}, "
+                    f"completed=0, success=0, fail=0, success_rate=0.0%\n")
+
+
 
 
 if __name__ == '__main__':
