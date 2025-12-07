@@ -103,7 +103,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         # # helpful doggy
         position = [0.35, 0, 0.147]  # front camera
         position_rand = 0.02  
-        angle = [30-5, 30+5]  # positive pitch down  #27-5,27+5
+        angle = [60-5, 60+5]  # positive pitch down  #27-5,27+5
         z_angle = [-2, 2]
         x_angle = [-2, 2]
         # our designed position
@@ -113,8 +113,12 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         update_interval = 5  # 5 works without retraining, 8 worse
 
-        original = (60, 106)
-        resized = (58, 87)
+        original = (106, 60)
+        resized = (87, 58)
+
+        # 竖向
+        # original = (60, 106)
+        # resized = (58, 87)
 
         original = (640, 480)
         resized = (87, 58)
