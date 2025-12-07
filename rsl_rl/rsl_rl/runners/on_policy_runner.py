@@ -232,16 +232,16 @@ class OnPolicyRunner:
         infos = {}
         infos["depth"] = self.env.depth_buffer.clone().to(self.device)[:, -1] if self.if_depth else None
         infos["rgb"] = self.env.rgb_buffer.clone().to(self.device)[:, -1] if self.if_depth else None
-        print("="*40)
-        print("Shape of depth in infos:", infos["depth"].shape if infos["depth"] is not None else None,
-              "Shape of rgb in infos:", infos["rgb"].shape if infos["rgb"] is not None else None,
-              "Min of depth in infos:", torch.min(infos["depth"]) if infos["depth"] is not None else None,
-              "Max of depth in infos:", torch.max(infos["depth"]) if infos["depth"] is not None else None,
-              "Min of rgb in infos:", torch.min(infos["rgb"]) if infos["rgb"] is not None else None,
-              "Max of rgb in infos:", torch.max(infos["rgb"]) if infos["rgb"] is not None else None,
-              "Type of depth in infos:", infos["depth"].dtype if infos["depth"] is not None else None,
-              "Type of rgb in infos:", infos["rgb"].dtype if infos["rgb"] is not None else None)
-        print("="*40)
+        # print("="*40)
+        # print("Shape of depth in infos:", infos["depth"].shape if infos["depth"] is not None else None,
+        #       "Shape of rgb in infos:", infos["rgb"].shape if infos["rgb"] is not None else None,
+        #       "Min of depth in infos:", torch.min(infos["depth"]) if infos["depth"] is not None else None,
+        #       "Max of depth in infos:", torch.max(infos["depth"]) if infos["depth"] is not None else None,
+        #       "Min of rgb in infos:", torch.min(infos["rgb"]) if infos["rgb"] is not None else None,
+        #       "Max of rgb in infos:", torch.max(infos["rgb"]) if infos["rgb"] is not None else None,
+        #       "Type of depth in infos:", infos["depth"].dtype if infos["depth"] is not None else None,
+        #       "Type of rgb in infos:", infos["rgb"].dtype if infos["rgb"] is not None else None)
+        # print("="*40)
         infos["delta_yaw_ok"] = torch.ones(self.env.num_envs, dtype=torch.bool, device=self.device)
         self.alg.depth_encoder.train()
         self.alg.depth_actor.train()
@@ -258,16 +258,16 @@ class OnPolicyRunner:
             delta_yaw_ok_buffer = []
             for i in range(self.depth_encoder_cfg["num_steps_per_env"]):
                 if infos["depth"] != None:
-                    print("="*40)
-                    print("Shape of depth in infos:", infos["depth"].shape if infos["depth"] is not None else None,
-                        "\nShape of rgb in infos:", infos["rgb"].shape if infos["rgb"] is not None else None,
-                        "\nMin of depth in infos:", torch.min(infos["depth"]) if infos["depth"] is not None else None,
-                        "\nMax of depth in infos:", torch.max(infos["depth"]) if infos["depth"] is not None else None,
-                        "\nMin of rgb in infos:", torch.min(infos["rgb"]) if infos["rgb"] is not None else None,
-                        "\nMax of rgb in infos:", torch.max(infos["rgb"]) if infos["rgb"] is not None else None,
-                        "\nType of depth in infos:", infos["depth"].dtype if infos["depth"] is not None else None,
-                        "\nType of rgb in infos:", infos["rgb"].dtype if infos["rgb"] is not None else None)
-                    print("="*40)
+                    # print("="*40)
+                    # print("Shape of depth in infos:", infos["depth"].shape if infos["depth"] is not None else None,
+                    #     "\nShape of rgb in infos:", infos["rgb"].shape if infos["rgb"] is not None else None,
+                    #     "\nMin of depth in infos:", torch.min(infos["depth"]) if infos["depth"] is not None else None,
+                    #     "\nMax of depth in infos:", torch.max(infos["depth"]) if infos["depth"] is not None else None,
+                    #     "\nMin of rgb in infos:", torch.min(infos["rgb"]) if infos["rgb"] is not None else None,
+                    #     "\nMax of rgb in infos:", torch.max(infos["rgb"]) if infos["rgb"] is not None else None,
+                    #     "\nType of depth in infos:", infos["depth"].dtype if infos["depth"] is not None else None,
+                    #     "\nType of rgb in infos:", infos["rgb"].dtype if infos["rgb"] is not None else None)
+                    # print("="*40)
                     with torch.no_grad():
                         scandots_latent = self.alg.actor_critic.actor.infer_scandots_latent(obs)
                     scandots_latent_buffer.append(scandots_latent)

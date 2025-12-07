@@ -1118,6 +1118,7 @@ class DepthAnythingTensorWrapper(nn.Module):
         print(new_height, new_width)
         resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
         cv2.imshow(window_name, resized_depth_image)
+        cv2.waitKey(1)
 
         return depth_normalized # 不需要 detach，因为 numpy 转换已经断开了梯度
 
@@ -1167,9 +1168,6 @@ class RecurrentDepthBackbone_XYH_DA3(nn.Module):
         proprioception: [B, 53]
         rgb_image: [B, 58, 87, 3] - 原始RGB图像 (范围0-1)
         """
-        print(f"DEBUG: sensor_depth shape: {sensor_depth.shape}",
-              f"proprioception shape: {proprioception.shape}",
-              f"rgb_image shape: {rgb_image.shape}")
 
         # --- Step 1: DA3 预处理 (Tensor运算, 无numpy, 无梯度) ---
         # [B, 58, 87, 3] -> DA3 -> Normalize -> [B, 1, 58, 87]
@@ -1245,14 +1243,18 @@ class RecurrentDepthBackbone_Original_DA3(nn.Module):
         proprioception: [B, 53]
         rgb_image: [B, 58, 87, 3] - 原始RGB图像 (范围0-1)
         """
-        print(f"DEBUG: sensor_depth shape: {sensor_depth.shape}",
-              f"proprioception shape: {proprioception.shape}",
-              f"rgb_image shape: {rgb_image.shape}")
 
         # --- Step 1: DA3 预处理 (Tensor运算, 无numpy, 无梯度) ---
         # [B, 58, 87, 3] -> DA3 -> Normalize -> [B, 1, 58, 87]
         da3_depth = self.da3_processor(rgb_image)
-        
+
+        print("================== Depth Stats ==================")
+        print("DA3_Min:", da3_depth.min().item(), 
+              "\nDA3_Max:", da3_depth.max().item(),
+              "\nSensorDepth_Min:", sensor_depth.min().item(),
+              "\nSensorDepth_Max:", sensor_depth.max().item())
+        print("=================================================")
+
         # --- Step 2: 双流特征提取 ---
         # 流1: 物理传感器深度 (Absolute, Sparse)
         sensor_latent = self.base_backbone(sensor_depth) # -> [B, 32]
