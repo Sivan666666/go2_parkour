@@ -869,7 +869,7 @@ class DepthOnlyFCBackbone58x87_Original(nn.Module):
             self.output_activation = activation
 
     def forward(self, images: torch.Tensor):
-        if images.dim() == 3:
+        if images.dim() == 3:   # 普通深度是三维的，DA3的是四维的
             images_compressed = self.image_compression(images.unsqueeze(1))
         else:
             images_compressed = self.image_compression(images)
@@ -1024,170 +1024,46 @@ class DepthOnlyFCBackbone58x87_XYH(nn.Module):
 
         return latent
 
-
-# class DepthAnythingTensorWrapper(nn.Module):
-#     def __init__(self, encoder="depth-anything/DA3METRIC-LARGE", device="cuda"):
-#         super().__init__()
-#         print(f"Loading Depth Anything V3 ({encoder})... This may take a while.")
-        
-#         # 1. 加载模型
-#         # 注意：这里我们直接加载底层模型，不使用 .inference() 这种带 numpy 转换的高级 API
-#         try:
-#             self.model = DepthAnything3.from_pretrained(encoder).to(device)
-#         except Exception as e:
-#             print(f"Error loading DA3: {e}")
-#             raise e
-
-#         # 2. 冻结参数 (极度重要！防止显存爆炸和破坏预训练权重)
-#         self.model.eval()
-#         for param in self.model.parameters():
-#             param.requires_grad = False
-            
-#         # DA3 标准输入参数
-#         self.mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
-#         self.std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
-#         # DA3 推荐的推理分辨率，太小效果会很差
-
-#     def forward(self, rgb_images):
-#         """
-#         输入: rgb_images [Batch, 3, 58, 87], 范围应该是 0-1 (Float)
-#         输出: depth_map [Batch, 1, 58, 87], 范围 0-1 (Float, Normalized)
-#         """
-#         # 1. 严格的上下文保护，确保不计算梯度
-#         with torch.no_grad():
-
-
-#             # 3. 标准化 (Normalize)
-#             # (Image - Mean) / Std
-#             images_norm = (rgb_images - self.mean) / self.std
-
-#             # 4. 推理 (Inference)
-#             # DA3 的 forward 通常直接返回深度图，或者是一个 list/dict
-#             # 针对 Metric 模型，通常返回的是真实深度（米）
-#             da_output = self.model(images_norm)
-            
-#             # 处理可能的输出格式 (有些版本返回 list)
-#             if isinstance(da_output, (list, tuple)):
-#                 raw_depth = da_output[0]
-#             elif isinstance(da_output, dict):
-#                 raw_depth = da_output['depth']
-#             else:
-#                 raw_depth = da_output
-
-#             # 5. 下采样回 RL 分辨率 (Downsample)
-#             # 注意：raw_depth 可能是 [B, H, W]，需要 unsqueeze 增加通道维
-#             if raw_depth.dim() == 3:
-#                 raw_depth = raw_depth.unsqueeze(1)
-#             depth_small = F.interpolate(raw_depth, size=(58, 87), mode='bilinear', align_corners=False)
-
-#             # 6. 归一化 (Instance Normalization)
-#             # 将每个样本的深度归一化到 0-1 之间，作为“相对深度”特征
-#             # 这对融合非常关键，因为 Metric Depth 的绝对数值可能波动，相对形状更重要
-#             batch_min = depth_small.flatten(2).min(dim=2, keepdim=True)[0].unsqueeze(3) # [B, 1, 1, 1]
-#             batch_max = depth_small.flatten(2).max(dim=2, keepdim=True)[0].unsqueeze(3) # [B, 1, 1, 1]
-            
-#             # 防止除以 0
-#             depth_normalized = (depth_small - batch_min) / (batch_max - batch_min + 1e-6)
-
-#             return depth_normalized.detach() # 再次确保切断梯度
-
-
 class DepthAnythingTensorWrapper(nn.Module):
     def __init__(self, encoder="depth-anything/DA3METRIC-LARGE", device="cuda"):
         super().__init__()
         print(f"Loading Depth Anything V3 (Model: {encoder}) via Standard API...")
-        
-        try:
-            # 1. 初始化官方 API 包装器
-            self.api_wrapper = DepthAnything3.from_pretrained(encoder).to(device)
-        except KeyError:
-            print(f"❌ Error: Model '{encoder}' key not found. Trying fallback...")
-            self.api_wrapper = DepthAnything3.from_pretrained(model_name="da3metric-large").to(device)
-        except Exception as e:
-            print(f"❌ Error loading DA3: {e}")
-            raise e
+        self.api_wrapper = DepthAnything3.from_pretrained(encoder).to(device)
 
-        # =========================================================================
-        # [关键修复] 针对 ViT-Large 配置加载失败的强制补丁
-        # 必须修复，否则 inference() 内部调用 forward 时依然会崩
-        # =========================================================================
-        # print("������ Applying config patch to API internal model...")
-        # try:
-        #     # API 类的结构：self.api_wrapper -> .model (PyTorch Module) -> .backbone
-        #     if hasattr(self.api_wrapper, 'model'):
-        #         torch_model = self.api_wrapper.model
-        #         if hasattr(torch_model, 'backbone'):
-        #             # 强制覆盖，不管原来是什么
-        #             fixed_indexes = [4, 11, 17, 23]
-        #             torch_model.backbone.interaction_indexes = fixed_indexes
-        #             print(f"✅ [SUCCESS] Forced backbone.interaction_indexes = {fixed_indexes}")
-        #         else:
-        #             print("⚠️ Could not find 'backbone' in torch_model")
-        #     else:
-        #         print("⚠️ Could not find '.model' in api_wrapper")
-        # except Exception as e:
-        #     print(f"⚠️ Patch attempt failed: {e}")
-        # =========================================================================
-
-    def forward(self, rgb_images):
+    def forward(self, rgb_image):
         """
-        输入: [Batch, 3, 58, 87] (GPU Float Tensor, 0-1)
-        输出: [Batch, 1, 58, 87] (GPU Float Tensor, Normalized 0-1)
+        输入: [Batch, 58, 87, 3] (Tensor, 0-1 float32)
+        输出: [Batch, 1, 58, 87] (Tensor, Normalized 0-1 float32)
         """
         # ---------------------------------------------------------------------
-        # 1. 预处理：Tensor (GPU) -> List of Numpy (CPU, uint8)
+        # 1. 预处理：Tensor (GPU, float32) -> Numpy (CPU, uint8)
         # ---------------------------------------------------------------------
-        # 这里的转换会比较慢，但为了符合 API 规范必须这么做
-        
-        # 变换维度: [B, 3, H, W] -> [B, H, W, 3]
-        imgs_nhwc = rgb_images.permute(0, 2, 3, 1)
-        # 转换到 CPU Numpy
-        # 乘 255 转成标准图像格式 (uint8)
         t_start_1 = time.time()
-        imgs_np = (imgs_nhwc * 255.0).detach().cpu().numpy().astype(np.uint8)
-        # imgs_np = (rgb_images * 255.0).detach().cpu().numpy().astype(np.uint8)
-        # imgs_np = (imgs_nhwc).detach().cpu().numpy()
-        imgs_show = (imgs_nhwc * 255.0).detach().cpu().numpy().astype(np.uint8)
+        imgs_np = (rgb_image * 255).detach().cpu().numpy().astype(np.uint8)
         print(f"Tensor -> Numpy conversion time: {time.time() - t_start_1:.6f} s")
 
         # --- RGB Visualization Start ---
-        if imgs_show is not None and len(imgs_show) > 0:
-            rgb_vis = imgs_show[0]
+        if imgs_np is not None and len(imgs_np) > 0:
+            rgb_vis = imgs_np[0]
             bgr_vis = cv2.cvtColor(rgb_vis, cv2.COLOR_RGB2BGR)
             cv2.imshow("Input RGB", bgr_vis)
             cv2.waitKey(1)
         # --- RGB Visualization End ---
         
-        # 构造成 API 需要的 List 格式
-        # 这一步对于 Batch Size 很大 (如 4096) 会非常慢，建议训练时减小 num_envs
         image_list = [img for img in imgs_np]
 
         # ---------------------------------------------------------------------
-        # 2. 调用官方 API
+        # 2. 调用官方 API   显式指定 process_res 以匹配训练推理一致性
         # ---------------------------------------------------------------------
-        # inference() 内部会自动处理 resize , normalize, batching 等
-        try:
-            # 显式指定 process_res 以匹配训练推理一致性
-            prediction = self.api_wrapper.inference(image=image_list, process_res=630)
-        except TypeError as e:
-            if "NoneType" in str(e):
-                print("❌ CRITICAL: The patch failed. The model config is still broken.")
-            raise e
-            
-        # prediction.depth 是一个 Numpy Array: [Batch, H, W]
-        raw_depth_np = prediction.depth
+        prediction = self.api_wrapper.inference(image=image_list, process_res=630)
+
+        raw_depth_np = prediction.depth # [B, H, W]
 
         # --- Visualization Start ---
         if raw_depth_np is not None and len(raw_depth_np) > 0:
-            # Take the first image in the batch
             depth_vis = raw_depth_np[0]
-            # Normalize to 0-255
-            if depth_vis.max() - depth_vis.min() > 1e-6:
-                depth_vis = (depth_vis - depth_vis.min()) / (depth_vis.max() - depth_vis.min()) * 255.0
-            else:
-                depth_vis = depth_vis * 0
+            depth_vis = (depth_vis - depth_vis.min()) / (depth_vis.max() - depth_vis.min()) * 255.0
             depth_vis = depth_vis.astype(np.uint8)
-            # Apply colormap
             depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_INFERNO)
             cv2.imshow("Depth Anything V3 Output", depth_vis)
             cv2.waitKey(1)
@@ -1196,28 +1072,20 @@ class DepthAnythingTensorWrapper(nn.Module):
         # ---------------------------------------------------------------------
         # 3. 后处理：Numpy (CPU) -> Tensor (GPU)
         # ---------------------------------------------------------------------
-        device = rgb_images.device
-        
-        # 转回 Tensor
         t_start_2 = time.time()
-        depth_tensor = torch.from_numpy(raw_depth_np).to(device).float()
+        depth_tensor = torch.from_numpy(raw_depth_np).to(rgb_image.device).float()
         print(f"Numpy -> Tensor conversion time: {time.time() - t_start_2:.6f} s")
-        
-        # 增加 Channel 维度: [B, H, W] -> [B, 1, H, W]
-        if depth_tensor.dim() == 3:
-            depth_tensor = depth_tensor.unsqueeze(1)
             
         # ---------------------------------------------------------------------
         # 4. 调整到 RL 需要的分辨率 (58x87) 并归一化
         # ---------------------------------------------------------------------
         # 下采样
-        depth_small = F.interpolate(depth_tensor, size=(58, 87), mode='bilinear', align_corners=False)
+        resize_transform = torchvision.transforms.Resize((58, 87), interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
+        depth_small = resize_transform(depth_tensor.unsqueeze(1))  # [B, 1, 58, 87]
 
-        # Instance Normalization (归一化到 0-1)
+        # 归一化到 0-1
         batch_min = depth_small.flatten(2).min(dim=2, keepdim=True)[0].unsqueeze(3)
         batch_max = depth_small.flatten(2).max(dim=2, keepdim=True)[0].unsqueeze(3)
-        
-        # 加上 1e-6 防止除以 0
         depth_normalized = (depth_small - batch_min) / (batch_max - batch_min + 1e-6)
 
         return depth_normalized # 不需要 detach，因为 numpy 转换已经断开了梯度
@@ -1232,7 +1100,6 @@ class RecurrentDepthBackbone_XYH_DA3(nn.Module):
         last_activation = nn.Tanh()
         
         # --- 1. 初始化 DA3 处理器 ---
-        # 建议：如果显存不够，改用 "depth-anything/DA3-SMALL"
         self.da3_processor = DepthAnythingTensorWrapper()
         
         # --- 2. 双流骨干网络 ---
@@ -1265,15 +1132,16 @@ class RecurrentDepthBackbone_XYH_DA3(nn.Module):
 
     def forward(self, sensor_depth, proprioception, rgb_image):
         """
-        sensor_depth: [B, 58, 87] 或 [B, 1, 58, 87] - 真实的物理深度
+        sensor_depth: [B, 58, 87] 真实的物理深度
         proprioception: [B, 53]
-        rgb_image: [B, 3, 58, 87] - 原始RGB图像 (范围0-1)
+        rgb_image: [B, 58, 87, 3] - 原始RGB图像 (范围0-1)
         """
-        
+        print(f"DEBUG: sensor_depth shape: {sensor_depth.shape}",
+              f"proprioception shape: {proprioception.shape}",
+              f"rgb_image shape: {rgb_image.shape}")
+
         # --- Step 1: DA3 预处理 (Tensor运算, 无numpy, 无梯度) ---
-        # [B, 3, 58, 87] -> DA3 -> Normalize -> [B, 1, 58, 87]
-        # 注意：这里假设 rgb_image 是 (Batch, 3, H, W)
-        # 如果输入是 (Batch, H, W, 3)，请先 permute(0, 3, 1, 2)
+        # [B, 58, 87, 3] -> DA3 -> Normalize -> [B, 1, 58, 87]
         da3_depth = self.da3_processor(rgb_image)
         
         # --- Step 2: 双流特征提取 ---
