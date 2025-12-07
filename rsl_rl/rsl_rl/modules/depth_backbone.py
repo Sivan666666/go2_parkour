@@ -1032,14 +1032,14 @@ class DepthAnythingTensorWrapper(nn.Module):
 
     def forward(self, rgb_image):
         """
-        输入: [Batch, 58, 87, 3] (Tensor, 0-1 float32)
+        输入: [Batch, 58, 87, 3] (Tensor, 0-255 float32)
         输出: [Batch, 1, 58, 87] (Tensor, Normalized 0-1 float32)
         """
         # ---------------------------------------------------------------------
         # 1. 预处理：Tensor (GPU, float32) -> Numpy (CPU, uint8)
         # ---------------------------------------------------------------------
         t_start_1 = time.time()
-        imgs_np = (rgb_image * 255).detach().cpu().numpy().astype(np.uint8)
+        imgs_np = rgb_image.detach().cpu().numpy().astype(np.uint8)
         print(f"Tensor -> Numpy conversion time: {time.time() - t_start_1:.6f} s")
 
         # --- RGB Visualization Start ---
@@ -1083,10 +1083,16 @@ class DepthAnythingTensorWrapper(nn.Module):
         resize_transform = torchvision.transforms.Resize((58, 87), interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
         depth_small = resize_transform(depth_tensor.unsqueeze(1))  # [B, 1, 58, 87]
 
-        # 归一化到 0-1
-        batch_min = depth_small.flatten(2).min(dim=2, keepdim=True)[0].unsqueeze(3)
-        batch_max = depth_small.flatten(2).max(dim=2, keepdim=True)[0].unsqueeze(3)
-        depth_normalized = (depth_small - batch_min) / (batch_max - batch_min + 1e-6)
+        # 归一化到 -0.5 到 0.5 范围内
+        depth_image = depth_small.squeeze(1)  # [B, 58, 87]
+        far_clip = 2
+        near_clip = 0
+        # 1. 裁剪异常值 (非常重要，防止远处全是 inf)
+        depth_image = torch.clamp(depth_image, min=near_clip, max=far_clip)
+        # 2. 线性映射到 [0, 1]
+        depth_normalized = (depth_image - near_clip) / (far_clip - near_clip)
+        # 3. 归一化到 [-0.5, 0.5]
+        depth_normalized = depth_normalized - 0.5
 
         return depth_normalized # 不需要 detach，因为 numpy 转换已经断开了梯度
 
@@ -1174,6 +1180,73 @@ class RecurrentDepthBackbone_XYH_DA3(nn.Module):
     def reset_hidden_states(self, batch_size, device):
         self.hidden_states = None
 
+class RecurrentDepthBackbone_Original_DA3(nn.Module):
+    """
+    原始版本：使用浅层网络和单层 GRU + DA3 集成
+    """
+    def __init__(self, base_backbone, env_cfg) -> None:
+        super().__init__()
+        activation = nn.ELU()
+        last_activation = nn.Tanh()
+        # --- 1. 初始化 DA3 处理器 ---
+        self.da3_processor = DepthAnythingTensorWrapper()
+        
+        # --- 2. 双流骨干网络 ---
+        self.base_backbone = base_backbone # 处理 Sensor Depth
+        self.rgb_backbone = copy.deepcopy(base_backbone) # 处理 DA3 生成的 Depth
+        
+        # --- 3. 融合层 ---
+        # 两个 32 维 latent + 本体 53 维
+        prop_dim = 53 if env_cfg is None else env_cfg.env.n_proprio
+        fusion_input_dim = 32 + 32 + prop_dim
+        
+        self.combination_mlp = nn.Sequential(
+            nn.Linear(fusion_input_dim, 128),
+            activation,
+            nn.Linear(128, 32)
+        )
+
+        # 4. GRU & Output (保持不变)
+        self.rnn = nn.GRU(input_size=32, hidden_size=512, batch_first=True)
+        self.output_mlp = nn.Sequential(
+                                nn.Linear(512, 32+2),
+                                last_activation
+                            )
+        self.hidden_states = None
+
+    def forward(self, sensor_depth, proprioception, rgb_image):
+        """
+        sensor_depth: [B, 58, 87] 真实的物理深度
+        proprioception: [B, 53]
+        rgb_image: [B, 58, 87, 3] - 原始RGB图像 (范围0-1)
+        """
+        print(f"DEBUG: sensor_depth shape: {sensor_depth.shape}",
+              f"proprioception shape: {proprioception.shape}",
+              f"rgb_image shape: {rgb_image.shape}")
+
+        # --- Step 1: DA3 预处理 (Tensor运算, 无numpy, 无梯度) ---
+        # [B, 58, 87, 3] -> DA3 -> Normalize -> [B, 1, 58, 87]
+        da3_depth = self.da3_processor(rgb_image)
+        
+        # --- Step 2: 双流特征提取 ---
+        # 流1: 物理传感器深度 (Absolute, Sparse)
+        sensor_latent = self.base_backbone(sensor_depth) # -> [B, 32]
+        
+        # 流2: DA3 预测深度 (Relative, Dense)
+        # 我们用专门的 rgb_backbone 来学习如何理解 DA3 的输出
+        rgb_latent = self.rgb_backbone(da3_depth)      # -> [B, 32]
+        
+        # --- Step 3: 融合 ---
+        combined_input = torch.cat((sensor_latent, rgb_latent, proprioception), dim=-1)
+        fused_features = self.combination_mlp(combined_input)
+        depth_latent, self.hidden_states = self.rnn(fused_features[:, None, :], self.hidden_states)
+        depth_latent = self.output_mlp(depth_latent.squeeze(1))
+        
+        return depth_latent
+
+    def detach_hidden_states(self):
+        if self.hidden_states is not None:
+            self.hidden_states = self.hidden_states.detach().clone()
 class RecurrentDepthBackbone_XYH_RGB(nn.Module):
     """
     [双流融合版] 针对空心楼梯优化的 RNN 骨干 (修复 RGB 维度版)
@@ -1308,5 +1381,5 @@ class RecurrentDepthBackbone_XYH_RGB(nn.Module):
     def reset_hidden_states(self, batch_size, device):
         self.hidden_states = None
 
-RecurrentDepthBackbone = RecurrentDepthBackbone_XYH_DA3
+RecurrentDepthBackbone = RecurrentDepthBackbone_Original_DA3
 DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original

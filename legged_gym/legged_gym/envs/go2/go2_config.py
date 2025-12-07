@@ -123,9 +123,6 @@ class Go2RoughCfg( LeggedRobotCfg ):
         original = (640, 480)
         resized = (87, 58)
 
-        # 竖向
-        # original = (60, 106)
-        # resized = (58, 87)
 
         # 🔥 Horizontal FOV 域随机化
         horizontal_fov = 87  # 基准值

@@ -1302,25 +1302,10 @@ class LeggedRobot(BaseTask):
                 cv2.imshow(window_name, resized_depth_image)
                 # cv2.imshow("Depth Image", self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5)
 
-                rgb_img = self.rgb_buffer[self.lookat_id, -1].cpu().numpy()
-                # 2. 检查并转换通道 (Isaac Gym RGB -> OpenCV BGR)
-                if rgb_img.shape[-1] == 4:
-                    # 如果是 RGBA (4通道)，转为 BGR
-                    rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGBA2BGR)
-                elif rgb_img.shape[-1] == 3:
-                    # 如果是 RGB (3通道)，转为 BGR
-                    rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
-                # 3. 检查数据类型 (防止全白或全黑)
-                # 如果数据是 float 且最大值大于 1，说明是 0-255 的 float，需要转 uint8  (确实是0-255的float)
-                print("type:", rgb_img.dtype, "max:", rgb_img.max(), "min:", rgb_img.min())
-                if rgb_img.dtype != np.uint8:
-                    if rgb_img.max() > 1.1:
-                        rgb_img = rgb_img.astype(np.uint8)
-                    else:
-                        # 如果是 0-1 的 float，OpenCV 可以显示，但转为 0-255 更通用
-                        rgb_img = (rgb_img * 255).astype(np.uint8)
-                # (可选) 如果你想让 RGB 和 深度图一样大，可以加 resize
-                rgb_img = cv2.resize(rgb_img, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+                # 数据是0-255的float
+                rgb_img = self.rgb_buffer[self.lookat_id, -1].cpu().numpy().astype(np.uint8)
+                rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
+                
                 cv2.imshow("RGB Image", rgb_img)
                 cv2.waitKey(1)
 
