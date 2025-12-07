@@ -1035,6 +1035,22 @@ class DepthAnythingTensorWrapper(nn.Module):
         输入: [Batch, 58, 87, 3] (Tensor, 0-255 float32)
         输出: [Batch, 1, 58, 87] (Tensor, Normalized 0-1 float32)
         """
+        # 0.设置相机内参
+        batch = rgb_image.shape[0]
+        fx = 386.1309814453125
+        fy = 386.1309814453125
+        cx = 319.4610900878906
+        cy = 236.78018188476562
+        
+        K_single = np.array([
+            [fx, 0.0, cx],
+            [0.0, fy, cy],
+            [0.0, 0.0, 1.0]
+        ], dtype=np.float32)
+        
+        # 3. 扩展维度到 [N, 3, 3] ——————————注！！！！如果之后改为了B=192,N=1,这里要改成1，目前是为了匹配现在的模式！！！！
+        intrinsics = np.tile(K_single, (batch, 1, 1))
+
         # ---------------------------------------------------------------------
         # 1. 预处理：Tensor (GPU, float32) -> Numpy (CPU, uint8)
         # ---------------------------------------------------------------------
@@ -1055,13 +1071,15 @@ class DepthAnythingTensorWrapper(nn.Module):
         # ---------------------------------------------------------------------
         # 2. 调用官方 API   显式指定 process_res 以匹配训练推理一致性
         # ---------------------------------------------------------------------
-        prediction = self.api_wrapper.inference(image=image_list, process_res=630)
+        prediction = self.api_wrapper.inference(image=image_list, intrinsics=intrinsics, process_res=630)
 
         raw_depth_np = prediction.depth # [B, H, W]
+        focal_length = (intrinsics[:, 0, 0] + intrinsics[:, 1, 1]) / 2
+        depth_np = raw_depth_np * (focal_length[:, None, None] / 300)
 
         # --- Visualization Start ---
-        if raw_depth_np is not None and len(raw_depth_np) > 0:
-            depth_vis = raw_depth_np[0]
+        if depth_np is not None and len(depth_np) > 0:
+            depth_vis = depth_np[0]
             depth_vis = (depth_vis - depth_vis.min()) / (depth_vis.max() - depth_vis.min()) * 255.0
             depth_vis = depth_vis.astype(np.uint8)
             depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_INFERNO)
@@ -1073,7 +1091,7 @@ class DepthAnythingTensorWrapper(nn.Module):
         # 3. 后处理：Numpy (CPU) -> Tensor (GPU)
         # ---------------------------------------------------------------------
         t_start_2 = time.time()
-        depth_tensor = torch.from_numpy(raw_depth_np).to(rgb_image.device).float()
+        depth_tensor = torch.from_numpy(depth_np).to(rgb_image.device).float()
         print(f"Numpy -> Tensor conversion time: {time.time() - t_start_2:.6f} s")
             
         # ---------------------------------------------------------------------
@@ -1093,6 +1111,18 @@ class DepthAnythingTensorWrapper(nn.Module):
         depth_normalized = (depth_image - near_clip) / (far_clip - near_clip)
         # 3. 归一化到 [-0.5, 0.5]
         depth_normalized = depth_normalized - 0.5
+        
+        # 4. 可视化最终深度图 (调试用)
+        window_name = "DA3 Final Depth Image"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        scale_factor = 10
+        depth_image = depth_normalized[0].cpu().numpy() + 0.5
+        height, width = depth_image.shape[:2]
+        new_height = int(height * scale_factor)
+        new_width = int(width * scale_factor)
+        print(new_height, new_width)
+        resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+        cv2.imshow(window_name, resized_depth_image)
 
         return depth_normalized # 不需要 detach，因为 numpy 转换已经断开了梯度
 
