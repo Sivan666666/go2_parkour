@@ -114,19 +114,18 @@ class Go2RoughCfg( LeggedRobotCfg ):
         update_interval = 5  # 5 works without retraining, 8 worse
 
         original = (106, 60)
+        original_rgb = (640, 480)
         resized = (87, 58)
 
         # 竖向
         # original = (60, 106)
+        # original_rgb = (480, 640)
         # resized = (58, 87)
 
-        original = (640, 480)
-        resized = (87, 58)
 
-
-        # 🔥 Horizontal FOV 域随机化
-        horizontal_fov = 87  # 基准值
-        horizontal_fov_range = [86, 87, 88]   # 随机范围 86-88 度
+        # Horizontal FOV 
+        horizontal_fov = 87
+        horizontal_fov_rgb = 56
 
         buffer_len = 2
         

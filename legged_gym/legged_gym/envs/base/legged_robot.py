@@ -1184,7 +1184,7 @@ class LeggedRobot(BaseTask):
                                                                 gymapi.IMAGE_DEPTH)
             rgb_image_ = self.gym.get_camera_image_gpu_tensor(self.sim, 
                                                               self.envs[i], 
-                                                              self.cam_handles[i],
+                                                              self.cam_handles_rgb[i],
                                                               gymapi.IMAGE_COLOR)
             rgb_image = gymtorch.wrap_tensor(rgb_image_)
             # Gym 通常返回 [H, W, 4] (RGBA)，我们需要取前3个通道变成 [H, W, 3]
@@ -1967,26 +1967,18 @@ class LeggedRobot(BaseTask):
             camera_props.width = self.cfg.depth.original[0]
             camera_props.height = self.cfg.depth.original[1]
             camera_props.enable_tensors = True
-
-            #camera_horizontal_fov = self.cfg.depth.horizontal_fov 
-            # camera_horizontal_fov = 87.5
-            #  Horizontal FOV 域随机化
-            # 80% 概率使用标准值, 20% 概率从候选值中随机选择
-            if hasattr(self.cfg.depth, 'horizontal_fov_range') and hasattr(self.cfg.depth, 'horizontal_fov'):
-                if np.random.random() < 0.8:
-                    # 80% 概率: 使用标准 FOV
-                    camera_horizontal_fov = self.cfg.depth.horizontal_fov
-                else:
-                    # 20% 概率: 从候选值中随机选择
-                    fov_candidates = self.cfg.depth.horizontal_fov_range
-                    camera_horizontal_fov = np.random.choice(fov_candidates)
-            else:
-                # 后备方案: 使用固定值
-                camera_horizontal_fov = self.cfg.depth.horizontal_fov
-
+            camera_props.horizontal_fov = self.cfg.depth.horizontal_fov
             camera_handle = self.gym.create_camera_sensor(env_handle, camera_props)
             self.cam_handles.append(camera_handle)
-            print(self.cam_handles)
+
+            camera_props_rgb = gymapi.CameraProperties()
+            camera_props_rgb.width = self.cfg.depth.original_rgb[0]
+            camera_props_rgb.height = self.cfg.depth.original_rgb[1]
+            camera_props_rgb.enable_tensors = True
+            camera_props_rgb.horizontal_fov = self.cfg.depth.horizontal_fov_rgb
+            camera_handle_rgb = self.gym.create_camera_sensor(env_handle, camera_props_rgb)
+            self.cam_handles_rgb.append(camera_handle_rgb)
+            # print(self.cam_handles)
             local_transform = gymapi.Transform()
             
             camera_position_center = np.copy(config.position)
@@ -2001,6 +1993,7 @@ class LeggedRobot(BaseTask):
             root_handle = self.gym.get_actor_root_rigid_body_handle(env_handle, actor_handle)
             
             self.gym.attach_camera_to_body(camera_handle, env_handle, root_handle, local_transform, gymapi.FOLLOW_TRANSFORM)
+            self.gym.attach_camera_to_body(camera_handle_rgb, env_handle, root_handle, local_transform, gymapi.FOLLOW_TRANSFORM)
 
     def _create_envs(self):
         """ Creates environments:
@@ -2067,6 +2060,7 @@ class LeggedRobot(BaseTask):
         self.actor_handles = []
         self.envs = []
         self.cam_handles = []
+        self.cam_handles_rgb = []
         self.cam_tensors = []
         self.mass_params_tensor = torch.zeros(self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False)
         

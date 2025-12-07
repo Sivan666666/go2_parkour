@@ -1037,10 +1037,10 @@ class DepthAnythingTensorWrapper(nn.Module):
         """
         # 0.设置相机内参
         batch = rgb_image.shape[0]
-        fx = 386.1309814453125
-        fy = 386.1309814453125
-        cx = 319.4610900878906
-        cy = 236.78018188476562
+        fx = 606.828369140625
+        fy = 606.7074584960938
+        cx = 327.3159484863281
+        cy = 246.75430297851562
         
         K_single = np.array([
             [fx, 0.0, cx],
@@ -1111,7 +1111,7 @@ class DepthAnythingTensorWrapper(nn.Module):
         depth_normalized = (depth_image - near_clip) / (far_clip - near_clip)
         # 3. 归一化到 [-0.5, 0.5]
         depth_normalized = depth_normalized - 0.5
-        
+
         # 4. 可视化最终深度图 (调试用)
         window_name = "DA3 Final Depth Image"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
