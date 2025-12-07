@@ -1095,24 +1095,19 @@ class DepthAnythingTensorWrapper(nn.Module):
         print(f"Numpy -> Tensor conversion time: {time.time() - t_start_2:.6f} s")
             
         # ---------------------------------------------------------------------
-        # 4. 调整到 RL 需要的分辨率 (58x87) 并归一化
+        # 4. 裁剪深度；调整到 RL 需要的分辨率 (58x87) ；归一化
         # ---------------------------------------------------------------------
+        #裁剪
+        far_clip = 2
+        near_clip = 0.15
+        depth_image = torch.clip(depth_tensor, near_clip, far_clip)
         # 下采样
         resize_transform = torchvision.transforms.Resize((58, 87), interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
-        depth_small = resize_transform(depth_tensor.unsqueeze(1))  # [B, 1, 58, 87]
-
+        depth_image = resize_transform(depth_image.unsqueeze(1)).squeeze(1)  # [B, 58, 87]
         # 归一化到 -0.5 到 0.5 范围内
-        depth_image = depth_small.squeeze(1)  # [B, 58, 87]
-        far_clip = 2
-        near_clip = 0
-        # 1. 裁剪异常值 (非常重要，防止远处全是 inf)
-        depth_image = torch.clamp(depth_image, min=near_clip, max=far_clip)
-        # 2. 线性映射到 [0, 1]
-        depth_normalized = (depth_image - near_clip) / (far_clip - near_clip)
-        # 3. 归一化到 [-0.5, 0.5]
-        depth_normalized = depth_normalized - 0.5
+        depth_normalized = (depth_image - near_clip) / (far_clip - near_clip) - 0.5
 
-        # 4. 可视化最终深度图 (调试用)
+        # 5. 可视化最终深度图 (调试用)
         window_name = "DA3 Final Depth Image"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         scale_factor = 10
