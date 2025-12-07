@@ -699,8 +699,10 @@ class LeggedRobot(BaseTask):
         self.extras["delta_yaw_ok"] = self.delta_yaw < 0.6
         if self.cfg.depth.use_camera and self.global_counter % self.cfg.depth.update_interval == 0:
             self.extras["depth"] = self.depth_buffer[:, -2]  # have already selected last one
+            self.extras["rgb"] = self.rgb_buffer[:, -2]  # have already selected last one
         else:
             self.extras["depth"] = None
+            self.extras["rgb"] = None
         return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
 
     def get_history_observations(self):

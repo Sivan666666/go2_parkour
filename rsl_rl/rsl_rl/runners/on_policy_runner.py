@@ -231,6 +231,7 @@ class OnPolicyRunner:
         obs = self.env.get_observations()
         infos = {}
         infos["depth"] = self.env.depth_buffer.clone().to(self.device)[:, -1] if self.if_depth else None
+        infos["rgb"] = self.env.rgb_buffer.clone().to(self.device)[:, -1] if self.if_depth else None
         infos["delta_yaw_ok"] = torch.ones(self.env.num_envs, dtype=torch.bool, device=self.device)
         self.alg.depth_encoder.train()
         self.alg.depth_actor.train()
@@ -247,21 +248,16 @@ class OnPolicyRunner:
             delta_yaw_ok_buffer = []
             for i in range(self.depth_encoder_cfg["num_steps_per_env"]):
                 if infos["depth"] != None:
-                    current_rgb_raw = self.env.rgb_buffer[:, -1].clone().to(self.device) 
-
-                    # 2. 维度变换 [B, H, W, 3] -> [B, 3, H, W]
-                    # PyTorch 和 DA3 都需要 Channel First
-                    current_rgb = current_rgb_raw.permute(0, 3, 1, 2)
-
-                    # 3. 归一化 (0-255 -> 0-1)
-                    # 必须转 float 并除以 255，因为 DA3 Wrapper 期望输入是 0-1 的 float
-                    current_rgb = current_rgb.float() / 255.0
+                    print("Shape: of rgb:", infos["rgb"].shape,
+                          "Type:", infos["rgb"].dtype,
+                          "Shape of depth:", infos["depth"].shape,
+                          "Type:", infos["depth"].dtype)
                     with torch.no_grad():
                         scandots_latent = self.alg.actor_critic.actor.infer_scandots_latent(obs)
                     scandots_latent_buffer.append(scandots_latent)
                     obs_prop_depth = obs[:, :self.env.cfg.env.n_proprio].clone()
                     obs_prop_depth[:, 6:8] = 0
-                    depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth, current_rgb)  # clone is crucial to avoid in-place operation
+                    depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth, infos["rgb"].clone())  # clone is crucial to avoid in-place operation
                     # depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth)
                     depth_latent = depth_latent_and_yaw[:, :-2]
                     yaw = 1.5*depth_latent_and_yaw[:, -2:]

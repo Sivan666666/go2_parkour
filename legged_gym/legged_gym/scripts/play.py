@@ -190,15 +190,7 @@ def play(args):
     actions = torch.zeros(env.num_envs, 12, device=env.device, requires_grad=False)
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
-    current_rgb_raw = env.rgb_buffer[:, -1].clone().to("cuda")
-
-    # 2. 维度变换 [B, H, W, 3] -> [B, 3, H, W]
-    # PyTorch 和 DA3 都需要 Channel First
-    current_rgb = current_rgb_raw.permute(0, 3, 1, 2)
-
-    # 3. 归一化 (0-255 -> 0-1)
-    # 必须转 float 并除以 255，因为 DA3 Wrapper 期望输入是 0-1 的 float
-    current_rgb = current_rgb.float() / 255.0
+    infos["rgb"] = env.rgb_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
     for i in range(10*int(env.max_episode_length)):
         # # 强制设置 yaw 相关命令为0，保持直线行走
@@ -225,7 +217,7 @@ def play(args):
                 if infos["depth"] is not None:
                     obs_student = obs[:, :env.cfg.env.n_proprio].clone()
                     obs_student[:, 6:8] = 0
-                    depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student, current_rgb)
+                    depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student, infos["rgb"])
                     depth_latent = depth_latent_and_yaw[:, :-2]
                     yaw = depth_latent_and_yaw[:, -2:] * 0
                 # 不使用 yaw 修正，保持原始观测
