@@ -1025,7 +1025,7 @@ class DepthOnlyFCBackbone58x87_XYH(nn.Module):
         return latent
 
 class DepthAnythingTensorWrapper(nn.Module):
-    def __init__(self, encoder="depth-anything/DA3METRIC-LARGE", device="cuda"):
+    def __init__(self, encoder="depth-anything/DA3-SMALL", device="cuda"):
         super().__init__()
         print(f"Loading Depth Anything V3 (Model: {encoder}) via Standard API...")
         self.api_wrapper = DepthAnything3.from_pretrained(encoder).to(device)
@@ -1072,19 +1072,23 @@ class DepthAnythingTensorWrapper(nn.Module):
         # 2. 调用官方 API   显式指定 process_res 以匹配训练推理一致性
         # ---------------------------------------------------------------------
         raw_depth_list = []
+        raw_conf_list = []
         for i, img in enumerate(image_list):
             prediction = self.api_wrapper.inference(image=[img], intrinsics=intrinsics[i : i+1] , process_res=630)
             raw_depth_np_i = prediction.depth # [1, H, W]
+            raw_conf_i = prediction.conf  # [1, H, W]
             raw_depth_list.append(raw_depth_np_i)# [B, H, W]
+            raw_conf_list.append(raw_conf_i)
         raw_depth_np = np.concatenate(raw_depth_list, axis=0)  # [B, H, W]
-
+        raw_conf_np = np.concatenate(raw_conf_list, axis=0)  # [B, H, W]
         if raw_depth_np.ndim == 4:
             raw_depth_np = raw_depth_np.squeeze(1)
-        focal_length = (intrinsics[:, 0, 0] + intrinsics[:, 1, 1]) / 2
-        depth_np = raw_depth_np * (focal_length[:, None, None] / 300)
+        # focal_length = (intrinsics[:, 0, 0] + intrinsics[:, 1, 1]) / 2
+        # depth_np = raw_depth_np * (focal_length[:, None, None] / 300)
+        
         # --- Visualization Start ---
-        # if depth_np is not None and len(depth_np) > 0:
-        #     depth_vis = depth_np[0]
+        # if raw_depth_np is not None and len(raw_depth_np) > 0:
+        #     depth_vis = raw_depth_np[0]
         #     depth_vis = (depth_vis - depth_vis.min()) / (depth_vis.max() - depth_vis.min()) * 255.0
         #     depth_vis = depth_vis.astype(np.uint8)
         #     depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_INFERNO)
@@ -1096,23 +1100,36 @@ class DepthAnythingTensorWrapper(nn.Module):
         # 3. 后处理：Numpy (CPU) -> Tensor (GPU)
         # ---------------------------------------------------------------------
         t_start_2 = time.time()
-        depth_tensor = torch.from_numpy(depth_np).to(rgb_image.device).float()
+        device = rgb_image.device
+        depth_tensor = torch.from_numpy(raw_depth_np).to(device).float()
+        conf_tensor = torch.from_numpy(raw_conf_np).to(device).float()
         print(f"Numpy -> Tensor conversion time: {time.time() - t_start_2:.6f} s")
             
         # ---------------------------------------------------------------------
-        # 4. 裁剪深度；调整到 RL 需要的分辨率 (58x87) ；归一化
+        # 4. 替换低置信度深度值；调整到 RL 需要的分辨率 (58x87) ；归一化
         # ---------------------------------------------------------------------
-        #裁剪
-        far_clip = 2
-        near_clip = 0.15
-        depth_image = torch.clip(depth_tensor, near_clip, far_clip)
-        # 下采样
+        # (1) 替换低置信度深度值
+        # 生成掩码
+        low_conf_mask = conf_tensor < 0.75
+        # 确定填充值：使用当前 batch 中最大的深度值
+        fill_value = depth_tensor.max()
+        # 执行替换
+        depth_tensor[low_conf_mask] = fill_value
+        # (2) 下采样
         resize_transform = torchvision.transforms.Resize((58, 87), interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
-        depth_image = resize_transform(depth_image.unsqueeze(1)).squeeze(1)  # [B, 58, 87]
-        # 归一化到 -0.5 到 0.5 范围内
-        depth_normalized = (depth_image - near_clip) / (far_clip - near_clip) - 0.5
+        depth_image = resize_transform(depth_tensor.unsqueeze(1)).squeeze(1)  # [B, 58, 87]
+        # (3) 归一化到 -0.5 到 0.5 范围内
+        depth_flat = depth_image.flatten(1) 
+        # 计算每个 Batch 的 Min 和 Max
+        batch_min = depth_flat.min(dim=1, keepdim=True)[0] # 形状 [Batch, 1]
+        batch_max = depth_flat.max(dim=1, keepdim=True)[0] # 形状 [Batch, 1]
+        # 调整形状以进行广播
+        batch_min = batch_min.unsqueeze(-1) 
+        batch_max = batch_max.unsqueeze(-1)
+        # 执行归一化
+        depth_normalized = (depth_image - batch_min) / (batch_max - batch_min + 1e-6) - 0.5
 
-        # 5. 可视化最终深度图 (调试用)
+        # ---------------  可视化最终深度图 (调试用)  ---------------
         # window_name = "DA3 Final Depth Image"
         # cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         # scale_factor = 10
@@ -1124,6 +1141,18 @@ class DepthAnythingTensorWrapper(nn.Module):
         # resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
         # cv2.imshow(window_name, resized_depth_image)
         # cv2.waitKey(1)
+        # --------------------------------------------------------
+        # --------------- 有色可视化深度图 (调试用) ----------------
+        # if depth_normalized is not None and len(depth_normalized) > 0:
+        #     depth_vis = depth_normalized[0].detach().cpu().numpy() + 0.5
+        #     depth_vis = depth_vis * 255.0
+        #     depth_vis = depth_vis.astype(np.uint8)
+        #     depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_INFERNO)
+        #     depth_vis = cv2.resize(depth_vis, (640, 480), interpolation=cv2.INTER_LINEAR)
+            
+        #     cv2.imshow("Depth Anything V3 Final", depth_vis)
+        #     cv2.waitKey(1)
+        # --------------------------------------------------------
 
         return depth_normalized # 不需要 detach，因为 numpy 转换已经断开了梯度
 
