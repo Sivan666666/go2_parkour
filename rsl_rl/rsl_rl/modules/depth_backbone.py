@@ -1048,7 +1048,7 @@ class DepthAnythingTensorWrapper(nn.Module):
             [0.0, 0.0, 1.0]
         ], dtype=np.float32)
         
-        # 3. 扩展维度到 [N, 3, 3] ——————————注！！！！如果之后改为了B=192,N=1,这里要改成1，目前是为了匹配现在的模式！！！！
+        # 3. 扩展维度到 [N, 3, 3]
         intrinsics = np.tile(K_single, (batch, 1, 1))
 
         # ---------------------------------------------------------------------
@@ -1059,11 +1059,11 @@ class DepthAnythingTensorWrapper(nn.Module):
         print(f"Tensor -> Numpy conversion time: {time.time() - t_start_1:.6f} s")
 
         # --- RGB Visualization Start ---
-        if imgs_np is not None and len(imgs_np) > 0:
-            rgb_vis = imgs_np[0]
-            bgr_vis = cv2.cvtColor(rgb_vis, cv2.COLOR_RGB2BGR)
-            cv2.imshow("Input RGB", bgr_vis)
-            cv2.waitKey(1)
+        # if imgs_np is not None and len(imgs_np) > 0:
+        #     rgb_vis = imgs_np[0]
+        #     bgr_vis = cv2.cvtColor(rgb_vis, cv2.COLOR_RGB2BGR)
+        #     cv2.imshow("Input RGB", bgr_vis)
+        #     cv2.waitKey(1)
         # --- RGB Visualization End ---
         
         image_list = [img for img in imgs_np]
@@ -1071,20 +1071,25 @@ class DepthAnythingTensorWrapper(nn.Module):
         # ---------------------------------------------------------------------
         # 2. 调用官方 API   显式指定 process_res 以匹配训练推理一致性
         # ---------------------------------------------------------------------
-        prediction = self.api_wrapper.inference(image=image_list, intrinsics=intrinsics, process_res=630)
+        raw_depth_list = []
+        for i, img in enumerate(image_list):
+            prediction = self.api_wrapper.inference(image=[img], intrinsics=intrinsics[i : i+1] , process_res=630)
+            raw_depth_np_i = prediction.depth # [1, H, W]
+            raw_depth_list.append(raw_depth_np_i)# [B, H, W]
+        raw_depth_np = np.concatenate(raw_depth_list, axis=0)  # [B, H, W]
 
-        raw_depth_np = prediction.depth # [B, H, W]
+        if raw_depth_np.ndim == 4:
+            raw_depth_np = raw_depth_np.squeeze(1)
         focal_length = (intrinsics[:, 0, 0] + intrinsics[:, 1, 1]) / 2
         depth_np = raw_depth_np * (focal_length[:, None, None] / 300)
-
         # --- Visualization Start ---
-        if depth_np is not None and len(depth_np) > 0:
-            depth_vis = depth_np[0]
-            depth_vis = (depth_vis - depth_vis.min()) / (depth_vis.max() - depth_vis.min()) * 255.0
-            depth_vis = depth_vis.astype(np.uint8)
-            depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_INFERNO)
-            cv2.imshow("Depth Anything V3 Output", depth_vis)
-            cv2.waitKey(1)
+        # if depth_np is not None and len(depth_np) > 0:
+        #     depth_vis = depth_np[0]
+        #     depth_vis = (depth_vis - depth_vis.min()) / (depth_vis.max() - depth_vis.min()) * 255.0
+        #     depth_vis = depth_vis.astype(np.uint8)
+        #     depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_INFERNO)
+        #     cv2.imshow("Depth Anything V3 Output", depth_vis)
+        #     cv2.waitKey(1)
         # --- Visualization End ---
 
         # ---------------------------------------------------------------------
@@ -1108,17 +1113,17 @@ class DepthAnythingTensorWrapper(nn.Module):
         depth_normalized = (depth_image - near_clip) / (far_clip - near_clip) - 0.5
 
         # 5. 可视化最终深度图 (调试用)
-        window_name = "DA3 Final Depth Image"
-        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        scale_factor = 10
-        depth_image = depth_normalized[0].cpu().numpy() + 0.5
-        height, width = depth_image.shape[:2]
-        new_height = int(height * scale_factor)
-        new_width = int(width * scale_factor)
-        print(new_height, new_width)
-        resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
-        cv2.imshow(window_name, resized_depth_image)
-        cv2.waitKey(1)
+        # window_name = "DA3 Final Depth Image"
+        # cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        # scale_factor = 10
+        # depth_image = depth_normalized[0].cpu().numpy() + 0.5
+        # height, width = depth_image.shape[:2]
+        # new_height = int(height * scale_factor)
+        # new_width = int(width * scale_factor)
+        # print(new_height, new_width)
+        # resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+        # cv2.imshow(window_name, resized_depth_image)
+        # cv2.waitKey(1)
 
         return depth_normalized # 不需要 detach，因为 numpy 转换已经断开了梯度
 

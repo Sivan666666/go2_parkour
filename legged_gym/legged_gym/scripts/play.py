@@ -70,8 +70,8 @@ def play(args):
     env_cfg.env.episode_length_s = 60
     env_cfg.commands.resampling_time = 60
     
-    env_cfg.terrain.num_rows = 5
-    env_cfg.terrain.num_cols = 5
+    env_cfg.terrain.num_rows = 2
+    env_cfg.terrain.num_cols = 2
     env_cfg.terrain.height = [0.02, 0.02]
     # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
     #                                 "rough slope up": 0.0,
@@ -118,7 +118,7 @@ def play(args):
                                     "rough slope up": 0.0,
                                     "rough slope down": 0.0,
                                     "normal stairs DOWN": 0.0,
-                                    "normal stairs UP": 0.4,
+                                    "normal stairs UP": 0.,
                                     "discrete": 0., 
                                     "stepping stones": 0.0,
                                     "gaps": 0., 
@@ -127,10 +127,10 @@ def play(args):
                                     "wall": 0.0,
                                     "platform": 0.,
                                     "hollow stairs DOWN": 0.0, 
-                                    "hollow stairs UP": 0.4,
+                                    "hollow stairs UP": 1.0,
                                     "parkour": 0.0,         # 0.2
                                     "parkour_hurdle": 0.0,  # 0.2
-                                    "STRAIGHT flat": 0.2,
+                                    "STRAIGHT flat": 0.0,
                                     "parkour_step": 0.0,    # 0.2
                                     "parkour_gap": 0.0,     # 0.2
                                     "demo": 0.0}            # 0.2
@@ -145,7 +145,7 @@ def play(args):
     env_cfg.depth.angle = [20, 21]
 
     env_cfg.depth.position = [0.35, 0, 0.147]  # front camera 
-    env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
+    env_cfg.depth.angle = [30-1, 30+1]  # positive pitch down  #27-5,27+5
 
     # for go2
         # position = [0.3, 0, 0.08] # front camera 002-g2-camera 
