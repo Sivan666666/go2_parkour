@@ -91,7 +91,7 @@ class Terrain:
         rows = []
         for i, p in enumerate(cfg.terrain_proportions):
             name = terrain_names[i] if i < len(terrain_names) else f"type_{i}"
-            rows.append((str(i), name, f"{p:.1f}"))
+            rows.append((str(i), name, f"{p:.2f}"))
 
         # 计算列宽
         data = [headers] + rows
@@ -181,6 +181,7 @@ class Terrain:
             for i in range(self.cfg.num_rows):
                 difficulty = i / (self.cfg.num_rows-1)
                 choice = j / self.cfg.num_cols + 0.001
+                # print(f"Terrain choice={choice:.3f}, difficulty={difficulty:.3f}")
                 if random:
                     if max_difficulty:
                         terrain = self.make_terrain(choice, np.random.uniform(0.9, 0.95))
@@ -257,7 +258,7 @@ class Terrain:
             # step_width: difficulty=0时为0.4m，difficulty=1时为0.2m
             step_width = 0.4 - 0.2 * difficulty
 
-            staircase_length = 10.0  # 总楼梯区长度
+            staircase_length = 18.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
             # 计算顶部平台长度
             platform_size = staircase_length - birth_area_length - step_width * num_steps
@@ -284,6 +285,7 @@ class Terrain:
             gap_parkour_terrain(terrain, difficulty, platform_size=4)
             self.add_roughness(terrain)
         elif choice < self.proportions[8]:
+            # print("flat terrain")
             idx = 9
             flat_terrain(terrain)
             self.add_roughness(terrain)
@@ -335,7 +337,7 @@ class Terrain:
             # step_width: difficulty=0时为0.4m，difficulty=1时为0.2m
             step_width = 0.4 - 0.2 * difficulty
 
-            staircase_length = 10.0  # 总楼梯区长度
+            staircase_length = 18.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
             # 计算顶部平台长度
             platform_size = staircase_length - birth_area_length - step_width * num_steps

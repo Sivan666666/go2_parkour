@@ -1746,7 +1746,7 @@ class LeggedRobot(BaseTask):
             else:
                 # 后备方案: 使用固定值
                 camera_horizontal_fov = self.cfg.depth.horizontal_fov
-
+            camera_props.horizontal_fov = camera_horizontal_fov
             camera_handle = self.gym.create_camera_sensor(env_handle, camera_props)
             self.cam_handles.append(camera_handle)
             # print(self.cam_handles)
@@ -2223,6 +2223,8 @@ class LeggedRobot(BaseTask):
      
     def _reward_orientation(self):
         rew = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
+        # allowed = (self.env_class == 17) | (self.env_class == 9)
+        # rew[~allowed] *= 0.01
         rew[self.env_class != 17] = 0.
         return rew
 

@@ -38,7 +38,7 @@ from legged_gym.utils import  get_args, export_policy_as_jit, task_registry, Log
 from isaacgym import gymtorch, gymapi, gymutil
 import numpy as np
 import torch
-import cv2
+import cv2 
 from collections import deque
 import statistics
 import faulthandler
@@ -135,7 +135,7 @@ def play(args):
     #                                 "parkour_gap": 0.0,     # 0.2
     #                                 "demo": 0.0}            # 0.2
     
-    env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
+    # env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
     env_cfg.terrain.max_difficulty = True
     
