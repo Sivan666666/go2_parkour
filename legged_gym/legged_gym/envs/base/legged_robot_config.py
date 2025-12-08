@@ -193,19 +193,19 @@ class LeggedRobotCfg(BaseConfig):
                         "rough slope up": 0.0,
                         "rough slope down": 0.0,
                         "normal stairs down": 0.2,
-                        "normal stairs up": 0.2,
+                        "normal stairs up": 0.4,
                         "discrete": 0., 
                         "stepping stones": 0.0,
                         "gaps": 0., 
-                        "flat": 0.0,
+                        "flat": 0.2,
                         "pit": 0.0,
                         "wall": 0.0,
                         "platform": 0.,
                         "hollow stairs down": 0.2, 
-                        "hollow stairs up": 0.2,
+                        "hollow stairs up": 0.4,
                         "parkour": 0.0,         # 0.2
                         "parkour_hurdle": 0.0,  # 0.2
-                        "parkour_flat": 0.2,
+                        "parkour_flat": 0.0,
                         "parkour_step": 0.0,    # 0.2
                         "parkour_gap": 0.0,     # 0.2
                         "demo": 0.0}            # 0.2

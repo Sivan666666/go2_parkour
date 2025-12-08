@@ -1472,10 +1472,15 @@ class LeggedRobot(BaseTask):
             return
         
         dis_to_origin = torch.norm(self.root_states[env_ids, :2] - self.env_origins[env_ids, :2], dim=1)
-        threshold = self.commands[env_ids, 0] * self.cfg.env.episode_length_s 
+        threshold = self.commands[env_ids, 0] * self.cfg.env.episode_length_s * 0.8
         # threshold = 6
         move_up =dis_to_origin > 0.8*threshold
         move_down = dis_to_origin < 0.4*threshold
+
+        # 如果本回合已经经过所有目标点，也提升难度
+        # 注意：cur_goal_idx 是全量张量，取对应 env_ids 的进度判断
+        reach_goal_cutoff = self.cur_goal_idx[env_ids] >= self.cfg.terrain.num_goals
+        move_up = move_up | reach_goal_cutoff
 
         self.terrain_levels[env_ids] += 1 * move_up - 1 * move_down
         # # Robots that solve the last level are sent to a random one
@@ -2225,7 +2230,8 @@ class LeggedRobot(BaseTask):
         rew = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
         # allowed = (self.env_class == 17) | (self.env_class == 9)
         # rew[~allowed] *= 0.01
-        rew[self.env_class != 17] = 0.
+        # rew[self.env_class != 17] = 0.
+        rew[self.env_class != 9] *= 0.0001
         return rew
 
     def _reward_dof_acc(self):

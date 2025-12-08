@@ -685,7 +685,9 @@ def stairs_terrain(terrain, step_height, platform_size=1., staircase_length=5.0,
 
     # 将最后一个目标点（第`num_goals`个）放置在顶部平台的中心
     top_platform_center_x = platform_start_x + (platform_end_x - platform_start_x) / 2.0
-    goals_px.append([top_platform_center_x, terrain_mid_y_px])
+    # goals_px.append([top_platform_center_x, terrain_mid_y_px])
+    
+    goals_px.append([current_x_position_px + 2 * step_width_px, terrain_mid_y_px])
 
     terrain.goals = np.array(goals_px) * terrain.horizontal_scale
 
@@ -919,7 +921,9 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
 
     terrain.trimeshes.append(final_trimesh)
 
-    goals_m.append([platform_center_x_m, platform_center_y_m, current_height_m])
+    # goals_m.append([platform_center_x_m, platform_center_y_m, current_height_m])
+    # 设置最后一个waypoint在楼梯的前面一点点
+    goals_m.append([(current_x_pos_px + 2 * step_width_px) * terrain.horizontal_scale, platform_center_y_m, current_height_m])
 
     # --- 6. 赋值 ---
     terrain.goals = np.array(goals_m)
