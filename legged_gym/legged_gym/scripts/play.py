@@ -70,8 +70,8 @@ def play(args):
     env_cfg.env.episode_length_s = 60
     env_cfg.commands.resampling_time = 60
     
-    env_cfg.terrain.num_rows = 5
-    env_cfg.terrain.num_cols = 5
+    env_cfg.terrain.num_rows = 2
+    env_cfg.terrain.num_cols = 2
     env_cfg.terrain.height = [0.02, 0.02]
     # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
     #                                 "rough slope up": 0.0,
@@ -114,28 +114,28 @@ def play(args):
     #                                 "parkour_gap": 0.2, 
     #                                 "demo": 0.}
     
-    # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-    #                                 "rough slope up": 0.0,
-    #                                 "rough slope down": 0.0,
-    #                                 "normal stairs up": 0.0,
-    #                                 "normal stairs down": 0.5,
-    #                                 "discrete": 0., 
-    #                                 "stepping stones": 0.0,
-    #                                 "gaps": 0., 
-    #                                 "flat": 0.0,
-    #                                 "pit": 0.0,
-    #                                 "wall": 0.0,
-    #                                 "platform": 0.,
-    #                                 "hollow stairs up": 0.0, 
-    #                                 "hollow stairs down": 0.5,
-    #                                 "parkour": 0.0,         # 0.2
-    #                                 "parkour_hurdle": 0.0,  # 0.2
-    #                                 "parkour_flat": 0.,
-    #                                 "parkour_step": 0.0,    # 0.2
-    #                                 "parkour_gap": 0.0,     # 0.2
-    #                                 "demo": 0.0}            # 0.2
+    env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
+                                    "rough slope up": 0.0,
+                                    "rough slope down": 0.0,
+                                    "normal stairs up": 0.0,
+                                    "normal stairs down": 0.5,
+                                    "discrete": 0., 
+                                    "stepping stones": 0.0,
+                                    "gaps": 0., 
+                                    "flat": 0.0,
+                                    "pit": 0.0,
+                                    "wall": 0.0,
+                                    "platform": 0.,
+                                    "hollow stairs up": 0.0, 
+                                    "hollow stairs down": 0.5,
+                                    "parkour": 0.0,         # 0.2
+                                    "parkour_hurdle": 0.0,  # 0.2
+                                    "parkour_flat": 0.,
+                                    "parkour_step": 0.0,    # 0.2
+                                    "parkour_gap": 0.0,     # 0.2
+                                    "demo": 0.0}            # 0.2
     
-    # env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
+    env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
     env_cfg.terrain.max_difficulty = True
     
