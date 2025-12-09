@@ -184,7 +184,7 @@ class LeggedRobotCfg(BaseConfig):
         selected = False # select a unique terrain type and pass all arguments
         terrain_kwargs = None # Dict of arguments for selected terrain
         max_init_terrain_level = 5 # starting curriculum state
-        terrain_length = 10.
+        terrain_length = 18.
         terrain_width = 4
         num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
         num_cols = 40 # number of terrain cols (types)
@@ -192,8 +192,8 @@ class LeggedRobotCfg(BaseConfig):
         terrain_dict = {"smooth slope": 0., 
                         "rough slope up": 0.0,
                         "rough slope down": 0.0,
-                        "normal stairs down": 0.2,
-                        "normal stairs up": 0.4,
+                        "normal stairs down": 0.0,
+                        "normal stairs up": 0.5,
                         "discrete": 0., 
                         "stepping stones": 0.0,
                         "gaps": 0., 
@@ -201,8 +201,8 @@ class LeggedRobotCfg(BaseConfig):
                         "pit": 0.0,
                         "wall": 0.0,
                         "platform": 0.,
-                        "hollow stairs down": 0.2, 
-                        "hollow stairs up": 0.4,
+                        "hollow stairs down": 0.0, 
+                        "hollow stairs up": 0.5,
                         "parkour": 0.0,         # 0.2
                         "parkour_hurdle": 0.0,  # 0.2
                         "parkour_flat": 0.0,

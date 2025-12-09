@@ -100,8 +100,11 @@ def play(args):
     env_cfg.terrain.max_difficulty = True
 
 
-    env_cfg.depth.position = [0.35, 0, 0.147]  # front camera 
-    env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
+    # env_cfg.depth.position = [0.35, 0, 0.147]  # front camera 
+    # env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
+
+    # env_cfg.depth.position = [0.3, 0, 0.147]  # front camera 
+    # env_cfg.depth.angle = [30-1, 30+1]  # positive pitch down  #27-5,27+5
 
     # for go2
         # position = [0.3, 0, 0.08] # front camera 002-g2-camera 
@@ -164,14 +167,14 @@ def play(args):
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
-    for i in range(1*int(50)):
+    for i in range(1*int(1000)):
         # 1000 * 0.002 = 20s
         # episode length = env_cfg.env.episode_length_s / dt
         # # 强制设置 yaw 相关命令为0，保持直线行走
         # env.commands[:, 2] = 0.0  # yaw rate command 设为0
         
         # # 如果你想保持特定的前进方向，可以设置：
-        env.commands[:, 0] = 1  # forward velocity
+        env.commands[:, 0] = 0.5  # forward velocity
         env.commands[:, 2] = 0  # lateral velocity
 
 
@@ -197,8 +200,8 @@ def play(args):
                         yaw = depth_latent_and_yaw[:, -2:] * 0
                     # 不使用 yaw 修正,保持原始观测
                     obs[:, 6:8] = 1.5*yaw  # 注释掉这行
-                    #obs[:, 6:8] = 0  # 强制设为0
-                    obs[:, 6:8] = -env.yaw.unsqueeze(1)
+                    # obs[:, 6:8] = 0  # 强制设为0
+                    # obs[:, 6:8] = -env.yaw.unsqueeze(1)
                         
                 else:
                     depth_latent = None
@@ -215,47 +218,6 @@ def play(args):
         
         obs, _, rews, dones, infos = env.step(actions.detach())
         
-        # # ==========================================
-        # # 🔥 检查所有环境的 done 状态
-        # # ==========================================
-        # done_env_ids = torch.where(dones)[0]
-        
-        # for env_id in done_env_ids:
-        #     env_id_int = env_id.item()
-            
-        #     # 只记录第一次完成的结果
-        #     if success_rate_buffer[env_id_int] is None:
-        #         # 获取最后一个目标点位置
-        #         last_goal = env.env_goals[env_id, 0, :2]  # [2] (x, y)
-                
-        #         # 获取机器人当前位置
-        #         robot_pos = env.root_states[env_id, :2]  # [2] (x, y)
-                
-        #         # 计算距离
-        #         distance_to_last_goal = torch.norm(robot_pos - last_goal).item()
-                
-        #         # 判断是否成功
-        #         success = distance_to_last_goal <= success_threshold
-        #         success_rate_buffer[env_id_int] = success
-                
-        #         # 打印该环境的首次完成信息
-        #         result = "✅ 成功" if success else "❌ 失败"
-        #         goal_idx = env.cur_goal_idx[env_id].item()
-                
-        #         print("\n" + "="*60)
-        #         print(f"环境 {env_id_int} 首次完成 - {result}")
-        #         print(f"  - 当前目标索引: {goal_idx}/{num_goals-1}")
-        #         print(f"  - 到最后目标点的距离: {distance_to_last_goal:.3f} m (阈值: {success_threshold} m)")
-        #         print(f"  - 机器人位置: {robot_pos}")
-        #         print(f"  - 目标位置: {last_goal}")
-                
-        #         # 计算当前总体成功率
-        #         completed_envs = [x for x in success_rate_buffer if x is not None]
-        #         if completed_envs:
-        #             success_count = sum(completed_envs)
-        #             total_count = len(completed_envs)
-        #             print(f"  - 当前总体成功率: {success_count}/{total_count} ({100*success_count/total_count:.1f}%)")
-        #         print("="*60 + "\n")
 
         # ==========================================
         # 🔥 在循环内部实时检查所有环境

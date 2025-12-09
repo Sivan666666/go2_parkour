@@ -1130,8 +1130,8 @@ class LeggedRobot(BaseTask):
             ("delta_next_yaw", self.delta_next_yaw[:, None], "下一目标点的航向偏差"),
             ("zero_lin_cmd_xy", 0*self.commands[:, 0:2], "占位的命令(vy,yaw)恒为0"),
             ("cmd_vx", self.commands[:, 0:1], "线速度命令vx"),
-            ("env_class!=17", (self.env_class != 17).float()[:, None], "地形标签：非类17"),
-            ("env_class==17", (self.env_class == 17).float()[:, None], "地形标签：类17"),
+            ("env_class!=9", (self.env_class != 9).float()[:, None], "地形标签：非类9"),
+            ("env_class==9", (self.env_class == 9).float()[:, None], "地形标签：类9"),
             ("dof_pos_err*scale(reindexed)", self.reindex((self.dof_pos - self.default_dof_pos_all) * self.obs_scales.dof_pos), "关节位置相对误差"),
             ("dof_vel*scale(reindexed)", self.reindex(self.dof_vel * self.obs_scales.dof_vel), "关节速度"),
             ("last_action(reindexed)", self.reindex(self.action_history_buf[:, -1]), "上一时刻动作"),
@@ -1146,8 +1146,8 @@ class LeggedRobot(BaseTask):
                             self.delta_next_yaw[:, None],
                             0*self.commands[:, 0:2], 
                             self.commands[:, 0:1],  #[1,1]
-                            (self.env_class != 17).float()[:, None], 
-                            (self.env_class == 17).float()[:, None],
+                            (self.env_class != 9).float()[:, None], 
+                            (self.env_class == 9).float()[:, None],
                             self.reindex((self.dof_pos - self.default_dof_pos_all) * self.obs_scales.dof_pos),
                             self.reindex(self.dof_vel * self.obs_scales.dof_vel),
                             self.reindex(self.action_history_buf[:, -1]),
@@ -2220,7 +2220,7 @@ class LeggedRobot(BaseTask):
     
     def _reward_lin_vel_z(self):
         rew = torch.square(self.base_lin_vel[:, 2])
-        rew[self.env_class != 17] *= 0.5
+        rew[self.env_class != 9] *= 0.5
         return rew
     
     def _reward_ang_vel_xy(self):
@@ -2231,7 +2231,7 @@ class LeggedRobot(BaseTask):
         # allowed = (self.env_class == 17) | (self.env_class == 9)
         # rew[~allowed] *= 0.01
         # rew[self.env_class != 17] = 0.
-        rew[self.env_class != 9] *= 0.0001
+        rew[self.env_class != 9] *= 0.00001
         return rew
 
     def _reward_dof_acc(self):
@@ -2291,9 +2291,9 @@ class LeggedRobot(BaseTask):
     #     foot_leteral_vel = torch.sqrt(torch.sum(torch.square(footvel_in_body_frame[:, :, :2]), dim=2)).view(self.num_envs, -1)
     #     return torch.sum(height_error * foot_leteral_vel, dim=1)
     
-    # def _reward_smoothness(self):
-    #     # second order smoothness
-    #     return torch.sum(torch.square(self.actions - self.last_actions - self.last_actions + self.last_last_actions), dim=1)
+    def _reward_smoothness(self):
+        # second order smoothness
+        return torch.sum(torch.square(self.actions - self.last_actions - self.last_actions + self.last_last_actions), dim=1)
 
     # def _reward_feet_contact_forces(self):
     #     # penalize high contact forces

@@ -179,6 +179,28 @@ class Go2RoughCfg( LeggedRobotCfg ):
     class rewards( LeggedRobotCfg.rewards ):
         soft_dof_pos_limit = 0.9
         base_height_target = 0.3
+        class scales:
+            # tracking rewards
+            tracking_goal_vel = 1.5
+            tracking_yaw = 0.5
+            # regularization rewards
+            lin_vel_z = -1.0
+            ang_vel_xy = -0.05
+            orientation = -1.
+            dof_acc = -2.5e-7
+            collision = -10.
+            action_rate = -0.1
+            delta_torques = -1.0e-7
+            torques = -0.00001
+            # hip_pos = -0.5
+            hip_pos = -0.6
+            smoothness = -0.001
+            dof_error = -0.04
+            feet_stumble = -1
+            feet_edge = -0.8
+            
+            # 根据HIMLOCO新加的奖励函数
+            # base_height = -0.2
 
     # class rewards( LeggedRobotCfg.rewards ):
     #     class scales:

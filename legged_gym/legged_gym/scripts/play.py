@@ -145,7 +145,7 @@ def play(args):
     # env_cfg.depth.angle = [20, 21]
 
     # env_cfg.depth.position = [0.35, 0, 0.147]  # front camera 
-    env_cfg.depth.angle = [45-1, 45+1]  # positive pitch down  #27-5,27+5
+    # env_cfg.depth.angle = [60-1, 30+1]  # positive pitch down  #27-5,27+5
 
     # for go2
         # position = [0.3, 0, 0.08] # front camera 002-g2-camera 
