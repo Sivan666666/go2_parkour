@@ -862,17 +862,6 @@ class LeggedRobot(BaseTask):
         # print(f"batch_depth_images shape: {batch_depth_images.shape}")
         # 2. 对整个批次进行并行处理
         processed_images = self.process_depth_image(batch_depth_images)
-
-        # # 调试：打印关键张量维度，方便定位问题
-        # print(f"processed_images shape: {processed_images.shape}")
-        # print(f"depth_buffer shape: {self.depth_buffer.shape}")
-        # print(f"num_envs: {self.num_envs}")
-        # print(f"init_flags shape: {self.episode_length_buf.shape}")
-
-        # # 3. 更新深度缓冲区
-        # # 安全校验：确保init_flags的长度和num_envs一致
-        # assert self.episode_length_buf.shape[0] == self.num_envs, \
-        #     f"episode_length_buf长度({self.episode_length_buf.shape[0]})与num_envs({self.num_envs})不匹配"
         
         init_flags = self.episode_length_buf <= 1
         # 确保init_flags是一维张量
@@ -897,27 +886,9 @@ class LeggedRobot(BaseTask):
             prev_depth = self.depth_buffer[update_env_ids, 1:]
             # 新增的深度图：扩展维度到 [M, 1, H, W]
             new_depth = processed_images[update_env_ids].unsqueeze(1)
-            # 安全校验：确保拼接维度匹配
-            # assert prev_depth.shape[1] + new_depth.shape[1] == self.cfg.depth.buffer_len, \
-            #     f"拼接维度不匹配：prev_depth({prev_depth.shape}) + new_depth({new_depth.shape}) != buffer_len({self.cfg.depth.buffer_len})"
-            # 拼接更新
+
             self.depth_buffer[update_env_ids] = torch.cat([prev_depth, new_depth], dim=1)
 
-        # # 旧版：逐环境处理 (性能较差)
-        # for i in range(self.num_envs):
-        #     depth_image_ = self.gym.get_camera_image_gpu_tensor(self.sim, 
-        #                                                         self.envs[i], 
-        #                                                         self.cam_handles[i],
-        #                                                         gymapi.IMAGE_DEPTH)
-            
-        #     depth_image = gymtorch.wrap_tensor(depth_image_)
-        #     depth_image = self.process_depth_image(depth_image, i)
-
-        #     init_flag = self.episode_length_buf <= 1
-        #     if init_flag[i]:
-        #         self.depth_buffer[i] = torch.stack([depth_image] * self.cfg.depth.buffer_len, dim=0)
-        #     else:
-        #         self.depth_buffer[i] = torch.cat([self.depth_buffer[i, 1:], depth_image.to(self.device).unsqueeze(0)], dim=0)
 
         self.gym.end_access_image_tensors(self.sim)
 
@@ -2233,6 +2204,10 @@ class LeggedRobot(BaseTask):
         # rew[self.env_class != 17] = 0.
         rew[self.env_class != 9] *= 0.00001
         return rew
+    
+    def _reward_roll(self):
+        # 专门的 roll 惩罚项（便于单独调权重）
+        return torch.square(self.roll)  # 或 torch.square(self.roll)
 
     def _reward_dof_acc(self):
         return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
@@ -2299,18 +2274,18 @@ class LeggedRobot(BaseTask):
     #     # penalize high contact forces
     #     return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
     
-    # def _reward_feet_air_time(self):
-    #     # Reward long steps
-    #     # Need to filter the contacts because the contact reporting of PhysX is unreliable on meshes
-    #     contact = self.contact_forces[:, self.feet_indices, 2] > 1.
-    #     contact_filt = torch.logical_or(contact, self.last_contacts) 
-    #     self.last_contacts = contact
-    #     first_contact = (self.feet_air_time > 0.) * contact_filt
-    #     self.feet_air_time += self.dt
-    #     rew_airTime = torch.sum((self.feet_air_time - 0.5) * first_contact, dim=1) # reward only on first contact with the ground
-    #     rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command
-    #     self.feet_air_time *= ~contact_filt
-    #     return rew_airTime
+    def _reward_feet_air_time(self):
+        # Reward long steps
+        # Need to filter the contacts because the contact reporting of PhysX is unreliable on meshes
+        contact = self.contact_forces[:, self.feet_indices, 2] > 1.
+        contact_filt = torch.logical_or(contact, self.last_contacts) 
+        self.last_contacts = contact
+        first_contact = (self.feet_air_time > 0.) * contact_filt
+        self.feet_air_time += self.dt
+        rew_airTime = torch.sum((self.feet_air_time - 0.5) * first_contact, dim=1) # reward only on first contact with the ground
+        rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command
+        self.feet_air_time *= ~contact_filt
+        return rew_airTime
     
     # def _reward_stand_still(self):
     #     # Penalize motion at zero commands

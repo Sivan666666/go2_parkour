@@ -71,7 +71,7 @@ class LeggedRobotCfg(BaseConfig):
         # additional visual inputs 
         include_foot_contacts = True
         
-        randomize_start_pos = False
+        randomize_start_pos = True
         randomize_start_vel = False
         randomize_start_yaw = False
         rand_yaw_range = 1.2

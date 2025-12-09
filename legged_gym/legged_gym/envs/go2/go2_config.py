@@ -198,6 +198,9 @@ class Go2RoughCfg( LeggedRobotCfg ):
             dof_error = -0.04
             feet_stumble = -1
             feet_edge = -0.8
+
+            feet_air_time = 0.01
+            roll = -1.
             
             # 根据HIMLOCO新加的奖励函数
             # base_height = -0.2
