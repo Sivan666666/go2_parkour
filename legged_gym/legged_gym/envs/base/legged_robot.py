@@ -678,7 +678,9 @@ class LeggedRobot(BaseTask):
                 self.delay = torch.tensor(self.cfg.domain_rand.action_delay_view, device=self.device, dtype=torch.float)
             indices = -self.delay -1
             actions = self.action_history_buf[:, indices.long()] # delay for 1/50=20ms
-
+            # print("delay list:", self.cfg.domain_rand.action_curr_step)
+            # print("self delay 几个 step:", self.delay)
+        
         self.global_counter += 1
         self.total_env_steps_counter += 1
         clip_actions = self.cfg.normalization.clip_actions / self.cfg.control.action_scale
@@ -1021,8 +1023,10 @@ class LeggedRobot(BaseTask):
         if len(env_ids) == 0:
             return
         # update curriculum
+        #print(self.terrain_levels[:30])
         if self.cfg.terrain.curriculum:
             self._update_terrain_curriculum(env_ids)
+        #print(self.terrain_levels[:30])
         # avoid updating command curriculum at each step since the maximum command is common to all envs
         if self.cfg.commands.curriculum and (self.common_step_counter % self.max_episode_length==0):
             self.update_command_curriculum(env_ids)
@@ -1057,6 +1061,8 @@ class LeggedRobot(BaseTask):
 
         # log additional curriculum info
         if self.cfg.terrain.curriculum:
+            print("Terrain level:", torch.mean(self.terrain_levels.float()).item())
+            print(self.terrain_levels[:30])
             self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
         if self.cfg.commands.curriculum:
             self.extras["episode"]["max_command_x"] = self.command_ranges["lin_vel_x"][1]
@@ -1875,6 +1881,10 @@ class LeggedRobot(BaseTask):
             max_init_level = self.cfg.terrain.max_init_terrain_level
             if not self.cfg.terrain.curriculum: max_init_level = self.cfg.terrain.num_rows - 1
             self.terrain_levels = torch.randint(0, max_init_level+1, (self.num_envs,), device=self.device)
+            # print(self.terrain_levels[:20])
+            # print(f"Max init terrain level: {max_init_level}")
+            # print(f"Num terrain levels: {self.cfg.terrain.num_rows}")
+            #print(f"Num terrain types: {}")
             self.terrain_types = torch.div(torch.arange(self.num_envs, device=self.device), (self.num_envs/self.cfg.terrain.num_cols), rounding_mode='floor').to(torch.long)
             self.max_terrain_level = self.cfg.terrain.num_rows
             self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.device).to(torch.float)
