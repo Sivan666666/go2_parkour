@@ -1035,7 +1035,7 @@ class DepthAnythingTensorWrapper(nn.Module):
         输入: [Batch, 58, 87, 3] (Tensor, 0-255 float32)
         输出: [Batch, 1, 58, 87] (Tensor, Normalized 0-1 float32)
         """
-        show_images = False     # 调试用，显示中间结果
+        show_images = True     # 调试用，显示中间结果
 
         # 0.设置相机内参
         batch = rgb_image.shape[0]
@@ -1070,11 +1070,11 @@ class DepthAnythingTensorWrapper(nn.Module):
         for i, img in enumerate(image_list):
             prediction = self.api_wrapper.inference(image=[img], intrinsics=intrinsics[i : i+1] , process_res=630)
             raw_depth_np_i = prediction.depth # [1, H, W]
-            raw_conf_i = prediction.conf  # [1, H, W]
+            # raw_conf_i = prediction.conf  # [1, H, W]
             raw_depth_list.append(raw_depth_np_i)# [B, H, W]
-            raw_conf_list.append(raw_conf_i)
+            # raw_conf_list.append(raw_conf_i)
         raw_depth_np = np.concatenate(raw_depth_list, axis=0)  # [B, H, W]
-        raw_conf_np = np.concatenate(raw_conf_list, axis=0)  # [B, H, W]
+        # raw_conf_np = np.concatenate(raw_conf_list, axis=0)  # [B, H, W]
         if raw_depth_np.ndim == 4:
             raw_depth_np = raw_depth_np.squeeze(1)
         # focal_length = (intrinsics[:, 0, 0] + intrinsics[:, 1, 1]) / 2
@@ -1096,19 +1096,29 @@ class DepthAnythingTensorWrapper(nn.Module):
         t_start_2 = time.time()
         device = rgb_image.device
         depth_tensor = torch.from_numpy(raw_depth_np).to(device).float()
-        conf_tensor = torch.from_numpy(raw_conf_np).to(device).float()
+        # conf_tensor = torch.from_numpy(raw_conf_np).to(device).float()
         print(f"Numpy -> Tensor conversion time: {time.time() - t_start_2:.6f} s")
             
         # ---------------------------------------------------------------------
         # 4. 替换低置信度深度值；调整到 RL 需要的分辨率 (58x87) ；归一化
         # ---------------------------------------------------------------------
         # (1) 替换低置信度深度值
-        # 生成掩码
-        low_conf_mask = conf_tensor < 0.75
-        # 确定填充值：使用当前 batch 中最大的深度值
-        fill_value = depth_tensor.max()
-        # 执行替换
-        depth_tensor[low_conf_mask] = fill_value
+        #     # 置信度归一化（原置信度是1~3.x)：
+        # conf_flat = conf_tensor.flatten(1) 
+        #     # 计算每个 Batch 的 Min 和 Max
+        # conf_batch_min = conf_flat.min(dim=1, keepdim=True)[0] # 形状 [Batch, 1]
+        # conf_batch_max = conf_flat.max(dim=1, keepdim=True)[0] # 形状 [Batch, 1]
+        # batch_max_vals = depth_tensor.flatten(1).max(dim=1)[0] # 形状 [Batch]
+        #     # 调整形状以进行广播
+        # conf_batch_min = conf_batch_min.unsqueeze(-1) 
+        # conf_batch_max = conf_batch_max.unsqueeze(-1)
+        # batch_max_vals = batch_max_vals.view(-1, 1, 1)
+        #     # 执行归一化
+        # conf_normalized = (conf_tensor - conf_batch_min) / (conf_batch_max - conf_batch_min + 1e-6)
+        #     # 生成掩码
+        # low_conf_mask = conf_normalized < 0.25
+        #     # 执行替换
+        # depth_tensor = torch.where(low_conf_mask, batch_max_vals, depth_tensor)
         # (2) 下采样
         resize_transform = torchvision.transforms.Resize((58, 87), interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
         depth_image = resize_transform(depth_tensor.unsqueeze(1)).squeeze(1)  # [B, 58, 87]
