@@ -1035,6 +1035,8 @@ class DepthAnythingTensorWrapper(nn.Module):
         输入: [Batch, 58, 87, 3] (Tensor, 0-255 float32)
         输出: [Batch, 1, 58, 87] (Tensor, Normalized 0-1 float32)
         """
+        show_images = False     # 调试用，显示中间结果
+
         # 0.设置相机内参
         batch = rgb_image.shape[0]
         fx = 606.828369140625
@@ -1057,14 +1059,6 @@ class DepthAnythingTensorWrapper(nn.Module):
         t_start_1 = time.time()
         imgs_np = rgb_image.detach().cpu().numpy().astype(np.uint8)
         print(f"Tensor -> Numpy conversion time: {time.time() - t_start_1:.6f} s")
-
-        # --- RGB Visualization Start ---
-        # if imgs_np is not None and len(imgs_np) > 0:
-        #     rgb_vis = imgs_np[0]
-        #     bgr_vis = cv2.cvtColor(rgb_vis, cv2.COLOR_RGB2BGR)
-        #     cv2.imshow("Input RGB", bgr_vis)
-        #     cv2.waitKey(1)
-        # --- RGB Visualization End ---
         
         image_list = [img for img in imgs_np]
 
@@ -1087,13 +1081,13 @@ class DepthAnythingTensorWrapper(nn.Module):
         # depth_np = raw_depth_np * (focal_length[:, None, None] / 300)
         
         # --- Visualization Start ---
-        # if raw_depth_np is not None and len(raw_depth_np) > 0:
-        #     depth_vis = raw_depth_np[0]
-        #     depth_vis = (depth_vis - depth_vis.min()) / (depth_vis.max() - depth_vis.min()) * 255.0
-        #     depth_vis = depth_vis.astype(np.uint8)
-        #     depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_INFERNO)
-        #     cv2.imshow("Depth Anything V3 Output", depth_vis)
-        #     cv2.waitKey(1)
+        if show_images:
+            depth_vis = raw_depth_np[0]
+            depth_vis = (depth_vis - depth_vis.min()) / (depth_vis.max() - depth_vis.min()) * 255.0
+            depth_vis = depth_vis.astype(np.uint8)
+            depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_INFERNO)
+            cv2.imshow("Depth Anything V3 Output", depth_vis)
+            cv2.waitKey(1)
         # --- Visualization End ---
 
         # ---------------------------------------------------------------------
@@ -1130,28 +1124,29 @@ class DepthAnythingTensorWrapper(nn.Module):
         depth_normalized = (depth_image - batch_min) / (batch_max - batch_min + 1e-6) - 0.5
 
         # ---------------  可视化最终深度图 (调试用)  ---------------
-        # window_name = "DA3 Final Depth Image"
-        # cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        # scale_factor = 10
-        # depth_image = depth_normalized[0].cpu().numpy() + 0.5
-        # height, width = depth_image.shape[:2]
-        # new_height = int(height * scale_factor)
-        # new_width = int(width * scale_factor)
-        # print(new_height, new_width)
-        # resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
-        # cv2.imshow(window_name, resized_depth_image)
-        # cv2.waitKey(1)
+        if show_images:
+            window_name = "DA3 Final Depth Image"
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            scale_factor = 10
+            depth_image = depth_normalized[0].cpu().numpy() + 0.5
+            height, width = depth_image.shape[:2]
+            new_height = int(height * scale_factor)
+            new_width = int(width * scale_factor)
+            print(new_height, new_width)
+            resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+            cv2.imshow(window_name, resized_depth_image)
+            cv2.waitKey(1)
         # --------------------------------------------------------
         # --------------- 有色可视化深度图 (调试用) ----------------
-        # if depth_normalized is not None and len(depth_normalized) > 0:
-        #     depth_vis = depth_normalized[0].detach().cpu().numpy() + 0.5
-        #     depth_vis = depth_vis * 255.0
-        #     depth_vis = depth_vis.astype(np.uint8)
-        #     depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_INFERNO)
-        #     depth_vis = cv2.resize(depth_vis, (640, 480), interpolation=cv2.INTER_LINEAR)
+        if show_images:
+            depth_vis = depth_normalized[0].detach().cpu().numpy() + 0.5
+            depth_vis = depth_vis * 255.0
+            depth_vis = depth_vis.astype(np.uint8)
+            depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_INFERNO)
+            depth_vis = cv2.resize(depth_vis, (640, 480), interpolation=cv2.INTER_LINEAR)
             
-        #     cv2.imshow("Depth Anything V3 Final", depth_vis)
-        #     cv2.waitKey(1)
+            cv2.imshow("Depth Anything V3 Final", depth_vis)
+            cv2.waitKey(1)
         # --------------------------------------------------------
 
         return depth_normalized # 不需要 detach，因为 numpy 转换已经断开了梯度
