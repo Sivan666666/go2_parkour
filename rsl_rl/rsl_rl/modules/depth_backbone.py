@@ -1244,7 +1244,7 @@ class RecurrentDepthBackbone_XYH_DA3(nn.Module):
 
 class RecurrentDepthBackbone_Original_DA3(nn.Module):
     """
-    原始版本：使用浅层网络和单层 GRU + DA3 集成
+    使用浅层网络和单层 GRU + DA3 集成
     """
     def __init__(self, base_backbone, env_cfg) -> None:
         super().__init__()
@@ -1447,5 +1447,82 @@ class RecurrentDepthBackbone_XYH_RGB(nn.Module):
     def reset_hidden_states(self, batch_size, device):
         self.hidden_states = None
 
-RecurrentDepthBackbone = RecurrentDepthBackbone_Original_DA3
+class RecurrentDepthBackbone_Original_DA3_SGM(nn.Module):
+    """
+    使用浅层网络和单层 GRU + DA3 集成 + SGM门控
+    """
+    def __init__(self, base_backbone, env_cfg) -> None:
+        super().__init__()
+        activation = nn.ELU()
+        last_activation = nn.Tanh()
+        # --- 1. 初始化 DA3 处理器 ---
+        self.da3_processor = DepthAnythingTensorWrapper()
+        
+        # --- 2. 双流骨干网络 ---
+        self.base_backbone = base_backbone # 处理 Sensor Depth
+        self.rgb_backbone = copy.deepcopy(base_backbone) # 处理 DA3 生成的 Depth
+        
+        # --- 3. SGM门控模块 ---
+        prop_dim = 53 if env_cfg is None else env_cfg.env.n_proprio
+        latent_dim = 32
+        gate_input_dim = latent_dim * 2 + prop_dim
+        
+        self.gate_mlp = nn.Sequential(
+            nn.Linear(gate_input_dim, 128),
+            nn.LayerNorm(128),
+            activation,
+            nn.Linear(128, latent_dim), # 输出维度与特征维度一致
+            nn.Sigmoid()
+        )
+
+        # --- 4. 融合层 ---
+        fusion_input_dim = latent_dim + prop_dim
+        self.combination_mlp = nn.Sequential(
+            nn.Linear(fusion_input_dim, 128),
+            activation,
+            nn.Linear(128, 32)
+        )
+
+        # 5. GRU & Output (保持不变)
+        self.rnn = nn.GRU(input_size=32, hidden_size=512, batch_first=True)
+        self.output_mlp = nn.Sequential(
+                                nn.Linear(512, 32+2),
+                                last_activation
+                            )
+        self.hidden_states = None
+
+    def forward(self, sensor_depth, proprioception, rgb_image):
+        """
+        sensor_depth: [B, 58, 87] 真实的物理深度
+        proprioception: [B, 53]
+        rgb_image: [B, 58, 87, 3] - 原始RGB图像 (范围0-1)
+        """
+
+        # --- Step 1: DA3 预处理 (Tensor运算, 无numpy, 无梯度) ---
+        # [B, 58, 87, 3] -> DA3 -> Normalize -> [B, 1, 58, 87]
+        da3_depth = self.da3_processor(rgb_image)
+
+        # --- Step 2: 双流特征提取 ---
+        # 流1: 物理传感器深度 (Absolute, Sparse)
+        sensor_latent = self.base_backbone(sensor_depth)    # -> [B, 32]
+        # 流2: DA3 预测深度 (Relative, Dense)
+        rgb_latent = self.rgb_backbone(da3_depth)           # -> [B, 32]
+        
+        # --- Step 3: SGM门控 ---
+        combined_input = torch.cat((sensor_latent, rgb_latent, proprioception), dim=-1)
+        G = self.gate_mlp(combined_input)  # [B, 32]
+        gated_latent = sensor_latent * G + rgb_latent * (1 - G)
+
+        # --- Step 4: 融合 ---
+        fused_features = self.combination_mlp(torch.cat((gated_latent, proprioception), dim=-1))
+        depth_latent, self.hidden_states = self.rnn(fused_features[:, None, :], self.hidden_states)
+        depth_latent = self.output_mlp(depth_latent.squeeze(1))
+        
+        return depth_latent
+
+    def detach_hidden_states(self):
+        if self.hidden_states is not None:
+            self.hidden_states = self.hidden_states.detach().clone()
+
+RecurrentDepthBackbone = RecurrentDepthBackbone_Original_DA3_SGM
 DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original
