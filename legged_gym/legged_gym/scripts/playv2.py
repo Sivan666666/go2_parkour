@@ -1,3 +1,4 @@
+      
 # SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 # 
@@ -73,58 +74,38 @@ def play(args):
     env_cfg.terrain.num_rows = 5
     env_cfg.terrain.num_cols = 5
     env_cfg.terrain.height = [0.02, 0.02]
-    # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-    #                                 "rough slope up": 0.0,
-    #                                 "rough slope down": 0.0,
-    #                                 "rough stairs up": 0., 
-    #                                 "rough stairs down": 0., 
-    #                                 "discrete": 0., 
-    #                                 "stepping stones": 0.0,
-    #                                 "gaps": 0., 
-    #                                 "smooth flat": 0,
-    #                                 "pit": 0.0,
-    #                                 "wall": 0.0,
-    #                                 "platform": 0.,
-    #                                 "large stairs up": 0.,
-    #                                 "large stairs down": 0.,
-    #                                 "parkour": 0.2,
-    #                                 "parkour_hurdle": 0.2,
-    #                                 "parkour_flat": 0.2,
-    #                                 "parkour_step": 0.2,
-    #                                 "parkour_gap": 0.2, 
-    #                                 "demo": 0.}
+
     env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-                                    "rough slope up": 0.,
-                                    "rough slope down": 0.0,
-                                    "rough stairs up": 0., 
-                                    "rough stairs down": 0., 
-                                    "discrete": 0., 
-                                    "stepping stones": 0.0,
-                                    "gaps": 0., 
-                                    "smooth flat": 0,
-                                    "pit": 0.0,
-                                    "wall": 0.0,
-                                    "platform": 0.,
-                                    "large stairs up": 0.,
-                                    "large stairs down": 0.,
-                                    "parkour": 0.0,
-                                    "parkour_hurdle": 0.0,
-                                    "parkour_flat": 0.0,
-                                    "parkour_step": 1.,
-                                    "parkour_gap": 0.0, 
-                                    "demo": 0.}
+                        "rough slope up": 0.0,
+                        "rough slope down": 0.0,
+                        "normal stairs down": 0.0,
+                        "normal stairs up": 0.0,
+                        "discrete": 0., 
+                        "stepping stones": 0.0,
+                        "gaps": 0., 
+                        "flat": 0.0,
+                        "pit": 0.0,
+                        "wall": 0.0,
+                        "platform": 0.,
+                        "hollow stairs down": 0.0, 
+                        "hollow stairs up": 1.0,
+                        "parkour": 0.0,         # 0.2
+                        "parkour_hurdle": 0.0,  # 0.2
+                        "parkour_flat": 0.0,
+                        "parkour_step": 0.0,    # 0.2
+                        "parkour_gap": 0.0,     # 0.2
+                        "demo": 0.0}            # 0.2
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
     env_cfg.terrain.max_difficulty = True
-    
-    env_cfg.depth.angle = [0, 1]
-    env_cfg.depth.camera_num_envs = 192
-    env_cfg.depth.position =  [0.355, 0, 0.065]
-    env_cfg.depth.angle = [20, 21]
 
-    env_cfg.depth.position = [0.3, 0, 0.147]  # front camera 
-    env_cfg.depth.angle = [29-1, 29+1]  # positive pitch down  #27-5,27+5
+
+    # env_cfg.depth.position = [0.35, 0, 0.147]  # front camera 
+    # env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
+
+    # env_cfg.depth.position = [0.3, 0, 0.147]  # front camera 
+    # env_cfg.depth.angle = [30-1, 30+1]  # positive pitch down  #27-5,27+5
 
     # for go2
         # position = [0.3, 0, 0.08] # front camera 002-g2-camera 
@@ -186,15 +167,16 @@ def play(args):
     actions = torch.zeros(env.num_envs, 12, device=env.device, requires_grad=False)
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
+    infos["rgb"] = env.rgb_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
-    for i in range(1*int(750)):
+    for i in range(1*int(1000)):
         # 1000 * 0.002 = 20s
         # episode length = env_cfg.env.episode_length_s / dt
         # # 强制设置 yaw 相关命令为0，保持直线行走
         # env.commands[:, 2] = 0.0  # yaw rate command 设为0
         
         # # 如果你想保持特定的前进方向，可以设置：
-        env.commands[:, 0] = 1  # forward velocity
+        env.commands[:, 0] = 0.5  # forward velocity
         env.commands[:, 2] = 0  # lateral velocity
 
 
@@ -215,12 +197,14 @@ def play(args):
                     if infos["depth"] is not None:
                         obs_student = obs[:, :env.cfg.env.n_proprio].clone()
                         obs_student[:, 6:8] = 0
-                        depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
+                        depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student, infos["rgb"])
+                        # depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
                         depth_latent = depth_latent_and_yaw[:, :-2]
                         yaw = depth_latent_and_yaw[:, -2:] * 0
                     # 不使用 yaw 修正,保持原始观测
                     obs[:, 6:8] = 1.5*yaw  # 注释掉这行
-                    #obs[:, 6:8] = 0  # 强制设为0
+                    # obs[:, 6:8] = 0  # 强制设为0
+                    # obs[:, 6:8] = -env.yaw.unsqueeze(1)
                         
                 else:
                     depth_latent = None
@@ -237,47 +221,6 @@ def play(args):
         
         obs, _, rews, dones, infos = env.step(actions.detach())
         
-        # # ==========================================
-        # # 🔥 检查所有环境的 done 状态
-        # # ==========================================
-        # done_env_ids = torch.where(dones)[0]
-        
-        # for env_id in done_env_ids:
-        #     env_id_int = env_id.item()
-            
-        #     # 只记录第一次完成的结果
-        #     if success_rate_buffer[env_id_int] is None:
-        #         # 获取最后一个目标点位置
-        #         last_goal = env.env_goals[env_id, 0, :2]  # [2] (x, y)
-                
-        #         # 获取机器人当前位置
-        #         robot_pos = env.root_states[env_id, :2]  # [2] (x, y)
-                
-        #         # 计算距离
-        #         distance_to_last_goal = torch.norm(robot_pos - last_goal).item()
-                
-        #         # 判断是否成功
-        #         success = distance_to_last_goal <= success_threshold
-        #         success_rate_buffer[env_id_int] = success
-                
-        #         # 打印该环境的首次完成信息
-        #         result = "✅ 成功" if success else "❌ 失败"
-        #         goal_idx = env.cur_goal_idx[env_id].item()
-                
-        #         print("\n" + "="*60)
-        #         print(f"环境 {env_id_int} 首次完成 - {result}")
-        #         print(f"  - 当前目标索引: {goal_idx}/{num_goals-1}")
-        #         print(f"  - 到最后目标点的距离: {distance_to_last_goal:.3f} m (阈值: {success_threshold} m)")
-        #         print(f"  - 机器人位置: {robot_pos}")
-        #         print(f"  - 目标位置: {last_goal}")
-                
-        #         # 计算当前总体成功率
-        #         completed_envs = [x for x in success_rate_buffer if x is not None]
-        #         if completed_envs:
-        #             success_count = sum(completed_envs)
-        #             total_count = len(completed_envs)
-        #             print(f"  - 当前总体成功率: {success_count}/{total_count} ({100*success_count/total_count:.1f}%)")
-        #         print("="*60 + "\n")
 
         # ==========================================
         # 🔥 在循环内部实时检查所有环境
@@ -311,12 +254,12 @@ def play(args):
                     
                     print("\n" + "="*60)
                     print(f"环境 {env_id} 首次完成 - {result}")
-                    print(f"  - 步数: {i}")
-                    print(f"  - 当前目标索引: {goal_idx}/{num_goals-1}")
-                    print(f"  - 到最后目标点的距离: {distance_to_last_goal:.3f} m")
-                    print(f"  - 机器人位置: {robot_pos}")
-                    print(f"  - 目标位置: {last_goal}")
-                    print(f"  - 触发原因: {'到达终点' if reached_goal else 'Done状态'}")
+                    # print(f"  - 步数: {i}")
+                    # print(f"  - 当前目标索引: {goal_idx}/{num_goals-1}")
+                    # print(f"  - 到最后目标点的距离: {distance_to_last_goal:.3f} m")
+                    # print(f"  - 机器人位置: {robot_pos}")
+                    # print(f"  - 目标位置: {last_goal}")
+                    # print(f"  - 触发原因: {'到达终点' if reached_goal else 'Done状态'}")
                     
                     # 计算当前总体成功率
                     completed_envs = [x for x in success_rate_buffer if x is not None]
@@ -367,18 +310,38 @@ def play(args):
         print(f"完成的环境数: {total_count}/{env.num_envs}")
         print(f"成功: {success_count}")
         print(f"失败: {fail_count}")
-        print(f"总体成功率: {100*success_count/env.num_envs:.1f}%")
+        success_rate = 100*success_count/env.num_envs
+        print(f"总体成功率: {success_rate:.1f}%")
         
-        # 打印每个环境的详细状态
-        print("\n各环境状态:")
-        for env_id, status in enumerate(success_rate_buffer):
-            if status is not None:
-                status_str = "✅ 成功" if status else "❌ 失败"
-                print(f"  环境 {env_id}: {status_str}")
-            else:
-                print(f"  环境 {env_id}: ⏸️ 未完成")
+        # 追加写入 evaluation.log（先读再写末尾），地形按行记录，仅记录概率不为0的项，最后加分隔线
+        log_file = os.path.join(log_pth, "evaluation.log")
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+        nonzero_terrain = {k: v for k, v in env_cfg.terrain.terrain_dict.items() if float(v) != 0.0}
+        terrain_lines = "\n".join([f"  {k}: {v:.1f}" for k, v in nonzero_terrain.items()]) if nonzero_terrain else "  none"
+
+        with open(log_file, "a+") as f:
+            f.seek(0); _ = f.read()
+            f.seek(0, os.SEEK_END)
+            f.write(
+                f"exptid={args.exptid}, step={i}, num_envs={env.num_envs}, "
+                f"completed={total_count}, success={success_count}, fail={fail_count}, "
+                f"success_rate={success_rate:.1f}, headless={args.headless}\n"
+            )
+            f.write("terrain:\n" + terrain_lines + "\n")
+            f.write("="*60 + "\n")
     else:
         print("没有环境完成第一次 episode")
+        # 也记录一次（成功率为0）
+        log_file = os.path.join(log_pth, "evaluation.log")
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        with open(log_file, "a+") as f:
+            f.seek(0); _ = f.read()
+            f.seek(0, os.SEEK_END)
+            f.write(f"exptid={args.exptid}, step={i}, num_envs={env.num_envs}, "
+                    f"completed=0, success=0, fail=0, success_rate=0.0%\n")
+
+
 
 
 if __name__ == '__main__':
@@ -386,4 +349,4 @@ if __name__ == '__main__':
     RECORD_FRAMES = False
     MOVE_CAMERA = False
     args = get_args()
-    play(args)
+    play(args)    

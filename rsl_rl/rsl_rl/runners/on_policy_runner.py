@@ -273,7 +273,7 @@ class OnPolicyRunner:
                     scandots_latent_buffer.append(scandots_latent)
                     obs_prop_depth = obs[:, :self.env.cfg.env.n_proprio].clone()
                     obs_prop_depth[:, 6:8] = 0
-                    depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth, infos["rgb"].clone())  # clone is crucial to avoid in-place operation
+                    depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth, infos["rgb"].clone())
                     # depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth)
                     depth_latent = depth_latent_and_yaw[:, :-2]
                     yaw = 1.5*depth_latent_and_yaw[:, -2:]

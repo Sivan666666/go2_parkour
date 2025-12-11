@@ -218,11 +218,12 @@ def play(args):
                     obs_student = obs[:, :env.cfg.env.n_proprio].clone()
                     obs_student[:, 6:8] = 0
                     depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student, infos["rgb"])
+                    # depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
                     depth_latent = depth_latent_and_yaw[:, :-2]
                     yaw = depth_latent_and_yaw[:, -2:] * 0
                 # 不使用 yaw 修正，保持原始观测
-                # obs[:, 6:8] = 1.5*yaw  # 注释掉这行
-                obs[:, 6:8] = -env.yaw.unsqueeze(1)  # [num_envs, 2] 两列都填 -yaw
+                obs[:, 6:8] = 1.5*yaw  # 注释掉这行
+                # obs[:, 6:8] = -env.yaw.unsqueeze(1)  # [num_envs, 2] 两列都填 -yaw
                 #obs[:, 6:8] = 0  # 强制设为0
                     
             else:
