@@ -134,7 +134,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         far_clip = 2
 
         # 噪声总开关
-        enable_noise = False
+        enable_noise = True
         dis_noise = 0.0
 
         # 1. Clip: 近距离设为无穷
