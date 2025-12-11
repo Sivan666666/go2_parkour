@@ -121,11 +121,14 @@ def get_load_path(root, load_run=-1, checkpoint=-1, model_name_include="model"):
     return load_path
 
 def update_cfg_from_args(env_cfg, cfg_train, args):
+    print("*" * 80)
+    print("Updating cfg from args:")
     # seed
     if env_cfg is not None:
         if args.use_camera:
             env_cfg.depth.use_camera = args.use_camera
         if env_cfg.depth.use_camera and args.headless:  # set camera specific parameters
+            print("Using depth camera with headless mode - updating terrain parameters accordingly")
             env_cfg.env.num_envs = env_cfg.depth.camera_num_envs
             env_cfg.terrain.num_rows = env_cfg.depth.camera_terrain_num_rows
             env_cfg.terrain.num_cols = env_cfg.depth.camera_terrain_num_cols
@@ -139,6 +142,7 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             # env_cfg.terrain.terrain_dict["demo"] = 0.15
             # env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
         if env_cfg.depth.use_camera:
+            print("Using depth camera - updating y_range accordingly")
             env_cfg.terrain.y_range = [-0.1, 0.1]
 
         # num envs
@@ -153,8 +157,10 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
         if args.cols is not None:
             env_cfg.terrain.num_cols = args.cols
         if args.delay:
+            print("Using action delay: {}".format(args.delay))
             env_cfg.domain_rand.action_delay = args.delay
         if not args.delay and not args.resume and not args.use_camera and args.headless: # if train from scratch
+            print("Automatically adding action delay !!!")
             env_cfg.domain_rand.action_delay = True
             env_cfg.domain_rand.action_curr_step = env_cfg.domain_rand.action_curr_step_scratch
     if cfg_train is not None:
@@ -176,7 +182,7 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             cfg_train.runner.load_run = args.load_run
         if args.checkpoint is not None:
             cfg_train.runner.checkpoint = args.checkpoint
-
+    print("*" * 80)
     return env_cfg, cfg_train
 
 def get_args():

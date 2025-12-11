@@ -251,12 +251,12 @@ def play(args):
                     
                     print("\n" + "="*60)
                     print(f"环境 {env_id} 首次完成 - {result}")
-                    print(f"  - 步数: {i}")
-                    print(f"  - 当前目标索引: {goal_idx}/{num_goals-1}")
-                    print(f"  - 到最后目标点的距离: {distance_to_last_goal:.3f} m")
-                    print(f"  - 机器人位置: {robot_pos}")
-                    print(f"  - 目标位置: {last_goal}")
-                    print(f"  - 触发原因: {'到达终点' if reached_goal else 'Done状态'}")
+                    # print(f"  - 步数: {i}")
+                    # print(f"  - 当前目标索引: {goal_idx}/{num_goals-1}")
+                    # print(f"  - 到最后目标点的距离: {distance_to_last_goal:.3f} m")
+                    # print(f"  - 机器人位置: {robot_pos}")
+                    # print(f"  - 目标位置: {last_goal}")
+                    # print(f"  - 触发原因: {'到达终点' if reached_goal else 'Done状态'}")
                     
                     # 计算当前总体成功率
                     completed_envs = [x for x in success_rate_buffer if x is not None]
@@ -323,7 +323,7 @@ def play(args):
             f.write(
                 f"exptid={args.exptid}, step={i}, num_envs={env.num_envs}, "
                 f"completed={total_count}, success={success_count}, fail={fail_count}, "
-                f"success_rate={success_rate:.1f}%\n"
+                f"success_rate={success_rate:.1f}, headless={args.headless}\n"
             )
             f.write("terrain:\n" + terrain_lines + "\n")
             f.write("="*60 + "\n")
