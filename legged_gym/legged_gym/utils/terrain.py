@@ -263,7 +263,7 @@ class Terrain:
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
             # 计算顶部平台长度
             platform_size = staircase_length - birth_area_length - step_width * num_steps
-            terrain_y_flat = 1.6 * difficulty
+            terrain_y_flat = 1.2  + 0.4 * difficulty
             stairs_terrain(terrain, step_height=height, platform_size=platform_size, staircase_length=staircase_length, num_goals=self.num_goals, birth_area_length=birth_area_length, step_width=step_width, terrain_y_flat=terrain_y_flat)
             self.add_roughness(terrain, difficulty)
         elif choice < self.proportions[5]:
@@ -340,7 +340,7 @@ class Terrain:
             staircase_length = 10.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
 
-            terrain_y_flat = 1.6 * difficulty
+            terrain_y_flat = 1.2  + 0.4 * difficulty
             # 计算顶部平台长度
             platform_size = staircase_length - birth_area_length - step_width * num_steps
             if platform_size < 0:
