@@ -42,7 +42,7 @@ def combine_trimeshes(*trimeshes):
     if len(trimeshes) > 2:
         return combine_trimeshes(
             trimeshes[0],
-            combine_trimeshes(trimeshes[1:])
+            combine_trimeshes(*trimeshes[1:])
         )
 
     # only two trimesh to combine

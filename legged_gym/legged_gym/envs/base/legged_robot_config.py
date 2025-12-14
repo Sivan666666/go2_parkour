@@ -163,19 +163,27 @@ class LeggedRobotCfg(BaseConfig):
         horizontal_scale_camera = 0.1
         vertical_scale = 0.005 # [m]
         border_size = 5 # [m]
-        height = [0.02, 0.06]
+        # roughness 增加的高度范围
+        height = [0.00, 0.005]
+        # 细化网格
         simplify_grid = False
         gap_size = [0.02, 0.1]
         stepping_stone_distance = [0.02, 0.08]
         downsampled_scale = 0.075
         curriculum = True
 
+        # 对应wall的两个flag 
         all_vertical = False
         no_flat = True
         
+        # todo add DR for friction
         static_friction = 1.0
         dynamic_friction = 1.0
+        
+        # 地形的弹性系数
         restitution = 0.
+
+        # todo 减少scandot数量
         measure_heights = True
         measured_points_x = [-0.45, -0.3, -0.15, 0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1.05, 1.2] # 1mx1.6m rectangle (without center line)
         measured_points_y = [-0.75, -0.6, -0.45, -0.3, -0.15, 0., 0.15, 0.3, 0.45, 0.6, 0.75]
