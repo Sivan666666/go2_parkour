@@ -164,7 +164,7 @@ class LeggedRobotCfg(BaseConfig):
         vertical_scale = 0.005 # [m]
         border_size = 5 # [m]
         # roughness 增加的高度范围
-        height = [0.00, 0.005]
+        height = [0.02, 0.06]
         # 细化网格
         simplify_grid = False
         gap_size = [0.02, 0.1]

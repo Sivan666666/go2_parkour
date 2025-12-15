@@ -340,7 +340,8 @@ class Terrain:
             staircase_length = 10.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
 
-            terrain_y_flat = 1.2  + 0.4 * difficulty
+            # terrain_y_flat = 1.2  + 0.4 * difficulty
+            terrain_y_flat = 1.6
             # 计算顶部平台长度
             platform_size = staircase_length - birth_area_length - step_width * num_steps
             if platform_size < 0:
