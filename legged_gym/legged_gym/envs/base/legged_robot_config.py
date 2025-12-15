@@ -71,7 +71,7 @@ class LeggedRobotCfg(BaseConfig):
         # additional visual inputs 
         include_foot_contacts = True
         
-        randomize_start_pos = False
+        randomize_start_pos = True
         randomize_start_vel = False
         randomize_start_yaw = False
         rand_yaw_range = 1.2
@@ -163,22 +163,34 @@ class LeggedRobotCfg(BaseConfig):
         horizontal_scale_camera = 0.1
         vertical_scale = 0.005 # [m]
         border_size = 5 # [m]
-        height = [0.02, 0.06]
+        # roughness 增加的高度范围
+        height = [0.00, 0.005]
+        # 细化网格
         simplify_grid = False
         gap_size = [0.02, 0.1]
         stepping_stone_distance = [0.02, 0.08]
         downsampled_scale = 0.075
         curriculum = True
 
+        # 对应wall的两个flag 
         all_vertical = False
         no_flat = True
         
+        # todo add DR for friction
         static_friction = 1.0
         dynamic_friction = 1.0
+        
+        # 地形的弹性系数
         restitution = 0.
+
+        # todo 减少scandot数量
         measure_heights = True
+        # measured_points_x = [-0.45, -0.3, -0.15, 0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1.05, 1.2] # 1mx1.6m rectangle (without center line)
+        # measured_points_y = [-0.75, -0.6, -0.45, -0.3, -0.15, 0., 0.15, 0.3, 0.45, 0.6, 0.75]
         measured_points_x = [-0.45, -0.3, -0.15, 0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1.05, 1.2] # 1mx1.6m rectangle (without center line)
-        measured_points_y = [-0.75, -0.6, -0.45, -0.3, -0.15, 0., 0.15, 0.3, 0.45, 0.6, 0.75]
+        measured_points_y = [-0.35, -0.28, -0.21, -0.14, -0.07, 0., 0.07, 0.14, 0.21, 0.28, 0.35]
+
+
         measure_horizontal_noise = 0.0
 
         selected = False # select a unique terrain type and pass all arguments
@@ -192,23 +204,24 @@ class LeggedRobotCfg(BaseConfig):
         terrain_dict = {"smooth slope": 0., 
                         "rough slope up": 0.0,
                         "rough slope down": 0.0,
-                        "normal stairs DOWN": 0.,
-                        "normal stairs UP": 0.4,
+                        "normal stairs down": 0.0,
+                        "normal stairs up": 0.5,
                         "discrete": 0., 
                         "stepping stones": 0.0,
                         "gaps": 0., 
-                        "flat": 0.0,
+                        "flat": 0.2,
                         "pit": 0.0,
                         "wall": 0.0,
                         "platform": 0.,
-                        "hollow stairs DOWN": 0., 
-                        "hollow stairs UP": 0.4,
+                        "hollow stairs down": 0.0, 
+                        "hollow stairs up": 0.5,
                         "parkour": 0.0,         # 0.2
                         "parkour_hurdle": 0.0,  # 0.2
-                        "STRAIGHT flat": 0.2,
+                        "parkour_flat": 0.0,
                         "parkour_step": 0.0,    # 0.2
                         "parkour_gap": 0.0,     # 0.2
                         "demo": 0.0}            # 0.2
+        
         
         terrain_proportions = list(terrain_dict.values())
         
@@ -328,6 +341,9 @@ class LeggedRobotCfg(BaseConfig):
             dof_error = -0.04
             feet_stumble = -1
             feet_edge = -1
+            
+            # 根据HIMLOCO新加的奖励函数
+            # base_height = -0.2
             
         only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
         tracking_sigma = 0.2 # tracking reward = exp(-error^2/sigma)

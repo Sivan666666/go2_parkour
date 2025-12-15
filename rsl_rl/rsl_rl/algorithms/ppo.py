@@ -339,7 +339,7 @@ class PPO:
         if self.if_depth:
             depth_encoder_loss = (scandots_latent_batch.detach() - depth_latent_batch).norm(p=2, dim=1).mean()
             depth_actor_loss = (actions_teacher_batch.detach() - actions_student_batch).norm(p=2, dim=1).mean()
-
+            
             depth_loss = depth_encoder_loss + depth_actor_loss
 
             self.depth_actor_optimizer.zero_grad()

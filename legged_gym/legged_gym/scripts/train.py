@@ -82,6 +82,18 @@ def train(args):
     except Exception as e:
         print(f"⚠️  Warning: Failed to backup depth_backbone.py: {e}")
 
+    # 4️⃣ 备份 terrain.py
+    try:
+        import legged_gym.utils.terrain as terrain_module
+        terrain_src = terrain_module.__file__
+        terrain_dst = os.path.join(log_pth, "terrain.py")
+        copyfile(terrain_src, terrain_dst)
+        print(f"✅ Backed up terrain: {terrain_src} -> {terrain_dst}")
+        # 同步到 WandB（可选）
+        wandb.save(terrain_src, policy="now")
+    except Exception as e:
+        print(f"⚠️  Warning: Failed to backup terrain.py: {e}")
+
     if args.debug:
         mode = "disabled"
         args.rows = 10
