@@ -208,7 +208,7 @@ def play(args):
                         
                 else:
                     depth_latent = None
-                obs[:, 6:8] = 0  # 强制设为0
+                # obs[:, 6:8] = 0  # 强制设为0
                 if hasattr(ppo_runner.alg, "depth_actor"):
                     actions = ppo_runner.alg.depth_actor(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
                 else:
