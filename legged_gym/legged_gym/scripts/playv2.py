@@ -104,7 +104,7 @@ def play(args):
     # env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
 
     # env_cfg.depth.position = [0.3, 0, 0.147]  # front camera 
-    # env_cfg.depth.angle = [30-1, 30+1]  # positive pitch down  #27-5,27+5
+    env_cfg.depth.angle = [30-0.1, 30+0.1]  # positive pitch down  #27-5,27+5
 
     # for go2
         # position = [0.3, 0, 0.08] # front camera 002-g2-camera 
@@ -120,6 +120,8 @@ def play(args):
     env_cfg.domain_rand.push_interval_s = 6
     env_cfg.domain_rand.randomize_base_mass = False
     env_cfg.domain_rand.randomize_base_com = False
+
+    env_cfg.env.randomize_start_pos = False
     
     depth_latent_buffer = []
     # prepare environment
@@ -175,7 +177,7 @@ def play(args):
         
         # # 如果你想保持特定的前进方向，可以设置：
         env.commands[:, 0] = 0.5  # forward velocity
-        env.commands[:, 2] = 0  # lateral velocity
+        # env.commands[:, 2] = 0  # lateral velocity
 
 
         with torch.no_grad():
@@ -205,7 +207,7 @@ def play(args):
                         
                 else:
                     depth_latent = None
-                obs[:, 6:8] = 0  # 强制设为0
+                # obs[:, 6:8] = 0  # 强制设为0
                 if hasattr(ppo_runner.alg, "depth_actor"):
                     actions = ppo_runner.alg.depth_actor(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
                 else:
