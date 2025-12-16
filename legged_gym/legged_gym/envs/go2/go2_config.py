@@ -151,7 +151,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         perlin_noise_evolution_speed = 0.005  # 时间演化速度
 
         #  启用块状空洞 代替 柏林
-        hole_noise_enable_prob = 0.2      # 20% 概率启用块状空洞
+        hole_noise_enable_prob = 0.5      # 50% 概率启用块状空洞
         hole_noise_prob = 0.05        # 5% 区域有空洞
         hole_block_size = 8           # 8×8 像素的块
 

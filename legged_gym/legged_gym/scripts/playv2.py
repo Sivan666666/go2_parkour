@@ -159,8 +159,15 @@ def play(args):
         path = os.path.join(path, model)
         print("Loading jit for policy: ", path)
         policy_jit = torch.jit.load(path, map_location=env.device)
+        used_checkpoint = checkpoint  # 记录使用的 checkpoint
     else:
         policy = ppo_runner.get_inference_policy(device=env.device)
+        # 尝试从日志目录推断使用的 checkpoint
+        try:
+            _, checkpoint = get_load_path(root=log_pth, checkpoint=args.checkpoint)
+            used_checkpoint = checkpoint
+        except Exception:
+            used_checkpoint = "unknown"
     estimator = ppo_runner.get_estimator_inference_policy(device=env.device)
     if env.cfg.depth.use_camera:
         depth_encoder = ppo_runner.get_depth_encoder_inference_policy(device=env.device)
@@ -325,8 +332,11 @@ def play(args):
             f.write(
                 f"exptid={args.exptid}, step={i}, num_envs={env.num_envs}, "
                 f"completed={total_count}, success={success_count}, fail={fail_count}, "
-                f"success_rate={success_rate:.1f}, headless={args.headless}\n"
+                f"success_rate={success_rate:.1f}%, headless={args.headless}\n"
             )
+            # 新增：换行记录是否加入 delay 和使用的 checkpoint
+            f.write(f"delay={getattr(env_cfg.domain_rand, 'action_delay', False)}\n")
+            f.write(f"checkpoint={used_checkpoint}\n")
             f.write("terrain:\n" + terrain_lines + "\n")
             f.write("="*60 + "\n")
     else:
