@@ -75,8 +75,8 @@ def play(args):
     env_cfg.terrain.height = [0.02, 0.02]
 
     env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-                        "rough slope up": 0.0,
-                        "rough slope down": 0.0,
+                        "normal stairs down": 0.0,
+                        "normal stairs up": 0.0,
                         "steep hollow stairs down": 0.0,
                         "steep hollow stairs up": 0.5,
                         "discrete": 0., 
