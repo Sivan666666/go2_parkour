@@ -63,8 +63,8 @@ class Terrain:
             "smooth slope",
             "rough slope up",
             "rough slope down",
-            "normal stairs down",
-            "normal stairs up",
+            "steep hollow stairs down",
+            "steep hollow stairs up",
             "discrete",
             "stepping stones",
             "gaps",
@@ -247,11 +247,8 @@ class Terrain:
             self.add_roughness(terrain)
         elif choice < self.proportions[4]:
             idx = 4
-            height = 0.1 + 0.1 * difficulty
-            if choice < self.proportions[3]:
-                idx = 5
-                height *= -1
-            # terrain_utils.pyramid_stairs_terrain(terrain, step_width=1., step_height=height, platform_size=3.)
+            step_height_first = 0.1 + 0.25 * difficulty
+            step_height_others = 0.1 + 0.15 * difficulty
 
             num_goals = 8
             num_steps = num_goals - 1
@@ -261,11 +258,32 @@ class Terrain:
             step_width = 0.4 - 0.2 * difficulty
             staircase_length = 10.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
+
+            terrain_y_flat = 1.6 * 1
             # 计算顶部平台长度
             platform_size = staircase_length - birth_area_length - step_width * num_steps
-            terrain_y_flat = 1.2  + 0.4 * difficulty
-            stairs_terrain(terrain, step_height=height, platform_size=platform_size, staircase_length=staircase_length, num_goals=self.num_goals, birth_area_length=birth_area_length, step_width=step_width, terrain_y_flat=terrain_y_flat)
-            self.add_roughness(terrain, difficulty)
+            if platform_size < 0:
+                raise ValueError("楼梯太多或太宽，platform_size为负，请调整参数！")
+
+            if choice<self.proportions[3]:
+                idx = 5 
+                step_height_first *= -1
+                step_height_others *= -1
+            hollow_stairs_terrain(
+                terrain,
+                step_height_first=step_height_first,
+                step_height_others=step_height_others,
+                slope_treshold=self.cfg.slope_treshold,
+                step_thickness=0.035,
+                platform_size=platform_size,
+                staircase_length=staircase_length,
+                num_goals=self.num_goals,
+                birth_area_length=birth_area_length,
+                step_width=step_width,
+                terrain_y_flat=terrain_y_flat,
+                difficulty = difficulty
+            )
+            self.add_roughness(terrain)
         elif choice < self.proportions[5]:
             idx = 6
             num_rectangles = 20
@@ -328,7 +346,8 @@ class Terrain:
             self.add_roughness(terrain, difficulty=1)
         elif choice < self.proportions[13]:
             # step_height = 0.1 + 0.3 * difficulty
-            step_height = 0.1 + 0.1 * difficulty
+            step_height_first = 0.1 + 0.05 * difficulty
+            step_height_others = 0.1 + 0.05 * difficulty
             idx = 13
 
             num_goals = 8
@@ -348,10 +367,12 @@ class Terrain:
 
             if choice<self.proportions[12]:
                 idx = 14 
-                step_height *= -1
+                step_height_first *= -1
+                step_height_others *= -1
             hollow_stairs_terrain(
                 terrain,
-                step_height=step_height,  # 减小每层上升高度为原来的90%
+                step_height_first=step_height_first,
+                step_height_others=step_height_others,
                 slope_treshold=self.cfg.slope_treshold,
                 step_thickness=0.035,
                 platform_size=platform_size,
@@ -697,14 +718,15 @@ def stairs_terrain(terrain, step_height, platform_size=1., staircase_length=5.0,
 
     return terrain
 
-def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0.05, platform_size=1., staircase_length=5.0, num_goals=8, birth_area_length=3.0, step_width=0.4, terrain_y_flat = 1, difficulty = 0):
+def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_treshold, step_thickness=0.05, platform_size=1., staircase_length=5.0, num_goals=8, birth_area_length=3.0, step_width=0.4, terrain_y_flat = 1, difficulty = 0):
     """
     生成一个镂空的楼梯，并可选择性地在其表面添加独立的Perlin噪声起伏。
     噪声生成使用TerrainPerlin，与barrier_track使用相同的逻辑。
     
     Parameters:
         terrain (terrain): 地形对象。
-        step_height (float): 每个台阶的高度（米）。
+        step_height_first (float): 第一个台阶的高度（米）。
+        step_height_others (float): 其他台阶的高度（米）。
         step_thickness (float): 台阶厚度（米）。
         platform_size (float): 地形末端顶部平坦区域的大小（米）。
         staircase_length (float): 楼梯在前进方向（X轴）上的总长度（米）。
@@ -833,7 +855,10 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
     heightsamples[:, :] = 0
 
     for i in range(num_steps):
-        current_height_m += step_height
+        if i == 0:
+            current_height_m += step_height_first
+        else:
+            current_height_m += step_height_others
         
         center_x_m = (current_x_pos_px + step_width_px / 2.0) * terrain.horizontal_scale
         center_y_m = terrain_length_m / 2.0
@@ -875,7 +900,7 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         current_x_pos_px += step_width_px
 
     # --- 5. 创建顶部平台 ---
-    current_height_m += step_height
+    current_height_m += step_height_others
     platform_width_px = staircase_length_px - current_x_pos_px
     platform_width_m = platform_width_px * terrain.horizontal_scale
     
@@ -887,7 +912,7 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         np.ceil(platform_width_px).astype(int),
         np.ceil(width_px_for_roughness).astype(int)
     )
-    if step_height < 0:
+    if step_height_others < 0:
         terrain.height_field_raw[:, :] = current_height_m / terrain.vertical_scale  # 挖洞
         terrain.height_field_raw[0: birth_area_length_px, 0: terrain.length] = 0
 
@@ -988,10 +1013,10 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
 
     rail_thickness = 0.03
     rail_mid = rail_thickness / 2
-    rail_height = step_height * 3
+    rail_height = min(step_height_first + step_height_others * 3, 0.6)
     rail_L_y = terrain_y_flat + rail_mid
     rail_R_y = terrain_length_m - terrain_y_flat - rail_mid
-    rail_height_short = rail_height + step_height
+    rail_height_short = rail_height + step_height_first
     rail_height_tall = rail_height + current_height_m
     current_x_pos_m = (current_x_pos_px) * terrain.horizontal_scale
 
@@ -1040,10 +1065,10 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         center_position=(current_x_pos_m + platform_width_m / 2, rail_R_y, Up_Bar_2_z)
     )
     
-    bar_tangent = step_height / step_width_m
+    bar_tangent = step_height_others / step_width_m
     bar_x = step_width_m * 7 - rail_thickness
     bar_z = bar_x * bar_tangent
-    Bar_1_z = (step_height + rail_thickness * bar_tangent + current_height_m) / 2 + rail_thickness / 2
+    Bar_1_z = (step_height_first + rail_thickness * bar_tangent + current_height_m) / 2 + rail_thickness / 2
     Bar_3_z = (rail_height_tall + rail_height_short + rail_thickness * bar_tangent) / 2 - rail_thickness / 2
     Bar_2_z = (Bar_1_z + Bar_3_z) / 2
     Bar_L1 = bar_trimesh(
