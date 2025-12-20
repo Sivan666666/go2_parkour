@@ -240,11 +240,25 @@ class Terrain:
             # self.add_roughness(terrain)
         elif choice < self.proportions[2]:
             idx = 2
-            if choice<self.proportions[1]:
+            height = 0.1 + 0.1 * difficulty
+            if choice < self.proportions[1]:
                 idx = 3
-                slope *= -1
-            terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.)
-            self.add_roughness(terrain)
+                height *= -1
+            # terrain_utils.pyramid_stairs_terrain(terrain, step_width=1., step_height=height, platform_size=3.)
+
+            num_goals = 8
+            num_steps = num_goals - 1
+            #step_width = 0.2  # 20cm
+
+            # step_width: difficulty=0时为0.4m，difficulty=1时为0.2m
+            step_width = 0.4 - 0.2 * difficulty
+            staircase_length = 10.0  # 总楼梯区长度
+            birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
+            # 计算顶部平台长度
+            platform_size = staircase_length - birth_area_length - step_width * num_steps
+            terrain_y_flat = 1.2  + 0.4 * difficulty
+            stairs_terrain(terrain, step_height=height, platform_size=platform_size, staircase_length=staircase_length, num_goals=self.num_goals, birth_area_length=birth_area_length, step_width=step_width, terrain_y_flat=terrain_y_flat)
+            self.add_roughness(terrain, difficulty)
         elif choice < self.proportions[4]:
             idx = 4
             step_height_first = 0.1 + 0.25 * difficulty

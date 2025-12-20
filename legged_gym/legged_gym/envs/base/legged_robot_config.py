@@ -203,8 +203,8 @@ class LeggedRobotCfg(BaseConfig):
         num_cols = 40 # number of terrain cols (types)
         
         terrain_dict = {"smooth slope": 0., 
-                        "rough slope up": 0.0,
-                        "rough slope down": 0.0,
+                        "normal stairs down": 0.0,
+                        "normal stairs up": 0.5,
                         "steep hollow stairs down": 0.0,
                         "steep hollow stairs up": 0.5,
                         "discrete": 0., 
