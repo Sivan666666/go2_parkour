@@ -791,7 +791,7 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
         assert len(heightfield.shape) == 2, "heightfield must be 2D"
         heightfield_x_fill = np.concatenate([
             heightfield,
-            heightfield[-2:, :],
+            heightfield[-1:, :],
         ], axis= 0)
         heightfield_y_fill = np.concatenate([
             heightfield_x_fill,
