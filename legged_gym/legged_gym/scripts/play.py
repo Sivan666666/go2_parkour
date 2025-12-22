@@ -71,68 +71,49 @@ def play(args):
     env_cfg.commands.resampling_time = 60
     
     env_cfg.terrain.num_rows = 2
-    env_cfg.terrain.num_cols = 2
+    env_cfg.terrain.num_cols = 8
     env_cfg.terrain.height = [0.02, 0.02]
+
     # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
     #                                 "rough slope up": 0.0,
     #                                 "rough slope down": 0.0,
-    #                                 "rough stairs up": 0., 
-    #                                 "rough stairs down": 0., 
+    #                                 "normal stairs up": 0.5,
+    #                                 "normal stairs down": 0.5,
     #                                 "discrete": 0., 
     #                                 "stepping stones": 0.0,
     #                                 "gaps": 0., 
-    #                                 "smooth flat": 0,
+    #                                 "flat": 0.5,
     #                                 "pit": 0.0,
     #                                 "wall": 0.0,
     #                                 "platform": 0.,
-    #                                 "large stairs up": 0.,
-    #                                 "large stairs down": 0.,
-    #                                 "parkour": 0.2,
-    #                                 "parkour_hurdle": 0.2,
-    #                                 "parkour_flat": 0.2,
-    #                                 "parkour_step": 0.2,
-    #                                 "parkour_gap": 0.2, 
-    #                                 "demo": 0.}
-    # env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-    #                                 "rough slope up": 0.,
-    #                                 "rough slope down": 0.0,
-    #                                 "rough stairs up": 0., 
-    #                                 "rough stairs down": 0., 
-    #                                 "discrete": 0., 
-    #                                 "stepping stones": 0.0,
-    #                                 "gaps": 0., 
-    #                                 "smooth flat": 0,
-    #                                 "pit": 0.0,
-    #                                 "wall": 0.0,
-    #                                 "platform": 0.,
-    #                                 "large stairs up": 0.,
-    #                                 "large stairs down": 0.,
-    #                                 "parkour": 0.2,
-    #                                 "parkour_hurdle": 0.2,
-    #                                 "parkour_flat": 0.2,
-    #                                 "parkour_step": 0.2,
-    #                                 "parkour_gap": 0.2, 
-    #                                 "demo": 0.}
-    
+    #                                 "hollow stairs up": 0.5, 
+    #                                 "hollow stairs down": 0.5,
+    #                                 "parkour": 0.,         # 0.2
+    #                                 "parkour_hurdle": 0.5,  # 0.2
+    #                                 "parkour_flat": 0.,
+    #                                 "parkour_step": 0.5,    # 0.2
+    #                                 "parkour_gap": 0.5,     # 0.2
+    #                                 "demo": 0.0}            # 0.2
+
     env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
                                     "rough slope up": 0.0,
                                     "rough slope down": 0.0,
-                                    "normal stairs up": 0.0,
-                                    "normal stairs down": 0.5,
+                                    "normal stairs up": 0.,
+                                    "normal stairs down": 0.0,
                                     "discrete": 0., 
                                     "stepping stones": 0.0,
                                     "gaps": 0., 
-                                    "flat": 0.0,
+                                    "flat": 0.,
                                     "pit": 0.0,
                                     "wall": 0.0,
                                     "platform": 0.,
-                                    "hollow stairs up": 0.0, 
-                                    "hollow stairs down": 0.5,
-                                    "parkour": 0.0,         # 0.2
-                                    "parkour_hurdle": 0.0,  # 0.2
+                                    "hollow stairs up": 0., 
+                                    "hollow stairs down": 1.,
+                                    "parkour": 0.,         # 0.2
+                                    "parkour_hurdle": 0.,  # 0.2
                                     "parkour_flat": 0.,
-                                    "parkour_step": 0.0,    # 0.2
-                                    "parkour_gap": 0.0,     # 0.2
+                                    "parkour_step": 0.,    # 0.2
+                                    "parkour_gap": 0.,     # 0.2
                                     "demo": 0.0}            # 0.2
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
@@ -161,12 +142,20 @@ def play(args):
     env_cfg.domain_rand.push_interval_s = 6
     env_cfg.domain_rand.randomize_base_mass = False
     env_cfg.domain_rand.randomize_base_com = False
+
+    if args.use_camera:
+        env_cfg.depth.angle = [30-0.1, 30+0.1]
+        env_cfg.depth.z_angle = [-0.1, 0.1]
+        env_cfg.depth.x_angle = [-5.1, 5.0]
+        env_cfg.env.randomize_start_pos = False
     
     depth_latent_buffer = []
     # prepare environment
     env: LeggedRobot
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
     obs = env.get_observations()
+
+
 
     if args.web:
         web_viewer.setup(env)
@@ -261,10 +250,14 @@ def play(args):
                         obs_student[:, 6:8] = 0
                         depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
                         depth_latent = depth_latent_and_yaw[:, :-2]
-                        yaw = depth_latent_and_yaw[:, -2:] * 0
+                        yaw = depth_latent_and_yaw[:, -2:] 
                     # 不使用 yaw 修正，保持原始观测
-                    obs[:, 6:8] = 1.5*yaw  # 注释掉这行
+                    # obs[:, 6:8] = 1.5*yaw  # 注释掉这行
                     obs[:, 6:8] = -env.yaw.unsqueeze(1)  # [num_envs, 2] 两列都填 -yaw  # 强制设为0
+
+                    # look_id = env.lookat_id
+                    # print("env.yaw[look_id]:", env.yaw[look_id].item())
+                    # print("obs[look_id, 6:8]:", obs[look_id, 6:7].item())
                     # obs[:, 6:8] = 0
                 
                         
@@ -285,6 +278,8 @@ def play(args):
             
         # 记录
         look_id = env.lookat_id
+        # print("env.yaw[look_id]:", env.yaw[look_id].item())
+        # print("obs[look_id, 6:8]:", obs[look_id, 6:7].item())
         cmd_vx = env.commands[look_id, 0].item()
         act_vx = env.base_lin_vel[look_id, 0].item()
         base_h = env._get_base_heights()[look_id].item()
@@ -329,7 +324,9 @@ def play(args):
 
         print("time:", env.episode_length_buf[env.lookat_id].item() / 50, 
               "cmd vx", env.commands[env.lookat_id, 0].item(),
-              "actual vx", env.base_lin_vel[env.lookat_id, 0].item(), )
+              "actual vx", env.base_lin_vel[env.lookat_id, 0].item(), 
+              "pos x", env.root_states[env.lookat_id, 0].item(),
+              "pos y", env.root_states[env.lookat_id, 1].item() )
         
         id = env.lookat_id
         

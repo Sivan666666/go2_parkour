@@ -186,7 +186,7 @@ class Terrain:
                 # print(f"Terrain choice={choice:.3f}, difficulty={difficulty:.3f}")
                 if random:
                     if max_difficulty:
-                        terrain = self.make_terrain(choice, np.random.uniform(0.9, 0.95))
+                        terrain = self.make_terrain(choice, np.random.uniform(0.99, 1))
                     else:
                         terrain = self.make_terrain(choice, np.random.uniform(0, 1))
                 else:
@@ -263,7 +263,7 @@ class Terrain:
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
             # 计算顶部平台长度
             platform_size = staircase_length - birth_area_length - step_width * num_steps
-            terrain_y_flat = 1.2  + 0.4 * difficulty
+            terrain_y_flat = 1.6
             stairs_terrain(terrain, step_height=height, platform_size=platform_size, staircase_length=staircase_length, num_goals=self.num_goals, birth_area_length=birth_area_length, step_width=step_width, terrain_y_flat=terrain_y_flat)
             self.add_roughness(terrain, difficulty)
         elif choice < self.proportions[5]:
@@ -328,7 +328,8 @@ class Terrain:
             self.add_roughness(terrain, difficulty=1)
         elif choice < self.proportions[13]:
             # step_height = 0.1 + 0.3 * difficulty
-            step_height = 0.1 + 0.1 * difficulty
+            # step_height = 0.1 + 0.1 * difficulty
+            step_height = 0.15
             idx = 13
 
             num_goals = 8
@@ -755,7 +756,7 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         assert len(heightfield.shape) == 2, "heightfield must be 2D"
         heightfield_x_fill = np.concatenate([
             heightfield,
-            heightfield[-2:, :],
+            heightfield[-1:, :],
         ], axis= 0)
         heightfield_y_fill = np.concatenate([
             heightfield_x_fill,
@@ -846,7 +847,7 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         heightfield_raw = np.zeros(step_resolution, dtype=np.float32)
         heightfield_raw[:, 0: width_px_for_roughness] = current_height_m / terrain.vertical_scale  # 填充当前台阶高度
 
-        heightfield_raw = add_roughness_heightfield(heightfield_raw, width=step_width_px, length=width_px_for_roughness, difficulty=difficulty)
+        # heightfield_raw = add_roughness_heightfield(heightfield_raw, width=step_width_px, length=width_px_for_roughness, difficulty=difficulty)
         heightsamples[
             current_x_pos_px:(current_x_pos_px + step_width_px),
             0 + start_y: width_px_for_roughness + start_y
@@ -988,7 +989,7 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
 
     rail_thickness = 0.03
     rail_mid = rail_thickness / 2
-    rail_height = step_height * 3
+    rail_height = 0.6
     rail_L_y = terrain_y_flat + rail_mid
     rail_R_y = terrain_length_m - terrain_y_flat - rail_mid
     rail_height_short = rail_height + step_height

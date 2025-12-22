@@ -53,6 +53,20 @@ from tqdm import tqdm
 import cv2
 import matplotlib.pyplot as plt
 
+import torch
+import torch.nn.functional as F
+from torch.autograd import Variable
+
+@torch.no_grad()
+def resize2d(img: torch.Tensor, size):
+    # img: [N, C, H, W] 或 [C, H, W]，size: (out_h, out_w)
+    if img.dim() == 3:
+        img = img.unsqueeze(0)
+        out = F.adaptive_avg_pool2d(Variable(img), size).data.squeeze(0)
+    else:
+        out = F.adaptive_avg_pool2d(Variable(img), size).data
+    return out
+
 def euler_from_quaternion(quat_angle):
         """
         Convert a quaternion into euler angles (roll, pitch, yaw)
@@ -711,6 +725,7 @@ class LeggedRobot(BaseTask):
     
     def normalize_depth_image(self, depth_image):
         depth_image = depth_image * -1
+        # print("depth_image min/max before clip:", depth_image.min().item(), depth_image.max().item())
         depth_image = (depth_image - self.cfg.depth.near_clip) / (self.cfg.depth.far_clip - self.cfg.depth.near_clip)  - 0.5
         return depth_image
     
@@ -718,8 +733,8 @@ class LeggedRobot(BaseTask):
         """处理深度图像 (全 GPU 优化版本)"""
         
         depth_images = self.crop_depth_image(depth_images)
-        depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]
-        
+        depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]     
+
         if getattr(self.cfg.depth, 'enable_noise', True):
             # 1) 近距离置为 -far_clip
             distance = torch.abs(depth_images)
@@ -799,37 +814,82 @@ class LeggedRobot(BaseTask):
                 depth_images[salt_mask] = -self.cfg.depth.far_clip
                 depth_images[pepper_mask] = -self.cfg.depth.near_clip
 
-            # 7) 高斯模糊（逐图分组卷积）
-            if getattr(self.cfg.depth, 'apply_gaussian_blur', False):
-                kernel_size = getattr(self.cfg.depth, 'gaussian_blur_kernel_size', 5)
-                sigma = getattr(self.cfg.depth, 'gaussian_blur_sigma', 1.0)
-
-                # 当 kernel_size 或 sigma 变化时重建核
-                if (not hasattr(self, '_gaussian_kernel')
-                    or self._gaussian_kernel_size != kernel_size
-                    or getattr(self, '_gaussian_sigma', None) != sigma):
-                    x = torch.arange(kernel_size, dtype=torch.float32, device=self.device) - kernel_size // 2
-                    gauss_1d = torch.exp(-x ** 2 / (2 * sigma ** 2))
-                    gauss_1d = gauss_1d / gauss_1d.sum()
-                    gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
-                    self._gaussian_kernel = gauss_2d.view(1, 1, kernel_size, kernel_size)  # [1,1,k,k]
-                    self._gaussian_kernel_size = kernel_size
-                    self._gaussian_sigma = sigma
-
-                # 输入 [N,1,H,W] -> [1,N,H,W]，按样本分组卷积
-                depth_4d = depth_images.unsqueeze(1)              # [N,1,H,W]
-                depth_4d_group = depth_4d.transpose(0, 1)         # [1,N,H,W]
-                kernel = self._gaussian_kernel.expand(depth_4d.shape[0], 1, kernel_size, kernel_size)  # [N,1,k,k]
-                depth_blurred = torch.nn.functional.conv2d(
-                    depth_4d_group, kernel, padding=kernel_size // 2, groups=depth_4d.shape[0]
-                ).transpose(0, 1).squeeze(1)  # 回到 [N,H,W]
-                depth_images = depth_blurred
+            
         
         # Clip 到有效范围
-        depth_images = torch.clip(depth_images, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
-        # depth_image = self.resize_transform(depth_image[None, :]).squeeze()
-        depth_images = self.resize_transform(depth_images.unsqueeze(1)).squeeze(1)
+        depth_images = torch.clip(depth_images , -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
         depth_images = self.normalize_depth_image(depth_images)
+        # print("depth_image min/max after noise and clip:", depth_images.min().item(), depth_images.max().item())
+        # depth_image = self.resize_transform(depth_image[None, :]).squeeze()
+        # depth_images = self.resize_transform(depth_images.unsqueeze(1)).squeeze(1)
+        depth_images = resize2d(depth_images.unsqueeze(1), (self.cfg.depth.resized[1], self.cfg.depth.resized[0])).squeeze(1)
+        # print("depth_image min/max after resize:", depth_images.min().item(), depth_images.max().item())
+        # depth_images = torch.clip(depth_images, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
+
+        # # 7) 高斯模糊（逐图分组卷积）
+        # if getattr(self.cfg.depth, 'apply_gaussian_blur', False):
+        #     kernel_size = getattr(self.cfg.depth, 'gaussian_blur_kernel_size', 5)
+        #     sigma = getattr(self.cfg.depth, 'gaussian_blur_sigma', 1.0)
+
+        #     # 当 kernel_size 或 sigma 变化时重建核
+        #     if (not hasattr(self, '_gaussian_kernel')
+        #         or self._gaussian_kernel_size != kernel_size
+        #         or getattr(self, '_gaussian_sigma', None) != sigma):
+        #         x = torch.arange(kernel_size, dtype=torch.float32, device=self.device) - kernel_size // 2
+        #         gauss_1d = torch.exp(-x ** 2 / (2 * sigma ** 2))
+        #         gauss_1d = gauss_1d / gauss_1d.sum()
+        #         gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
+        #         self._gaussian_kernel = gauss_2d.view(1, 1, kernel_size, kernel_size)  # [1,1,k,k]
+        #         self._gaussian_kernel_size = kernel_size
+        #         self._gaussian_sigma = sigma
+
+        #     # 输入 [N,1,H,W] -> [1,N,H,W]，按样本分组卷积
+        #     depth_4d = depth_images.unsqueeze(1)              # [N,1,H,W]
+        #     depth_4d_group = depth_4d.transpose(0, 1)         # [1,N,H,W]
+        #     kernel = self._gaussian_kernel.expand(depth_4d.shape[0], 1, kernel_size, kernel_size)  # [N,1,k,k]
+        #     depth_blurred = torch.nn.functional.conv2d(
+        #         depth_4d_group, kernel, padding=kernel_size // 2, groups=depth_4d.shape[0]
+        #     ).transpose(0, 1).squeeze(1)  # 回到 [N,H,W]
+        #     depth_images = depth_blurred
+        #     print("Applied Gaussian blur to depth images.")
+        
+        # 7) 高斯模糊（最终平滑，固定参数 + 边缘复制填充）
+        apply_gaussian_blur = True  # 是否应用高斯模糊
+        gaussian_blur_kernel_size = 3  # 核大小(奇数)
+        gaussian_blur_sigma = 1.0     # 标准差(越大越模糊)
+        if apply_gaussian_blur:
+            k = gaussian_blur_kernel_size
+            sigma = gaussian_blur_sigma
+            # 缓存核，避免重复构建
+            if (not hasattr(self, "_gaussian_kernel")
+                or getattr(self, "_gaussian_kernel_size", None) != k
+                or getattr(self, "_gaussian_sigma", None) != sigma):
+                x = torch.arange(k, dtype=torch.float32, device=self.device) - k // 2
+                gauss_1d = torch.exp(-x ** 2 / (2 * sigma ** 2))
+                gauss_1d = gauss_1d / gauss_1d.sum()
+                gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
+                self._gaussian_kernel = gauss_2d.view(1, 1, k, k)  # [1,1,k,k]
+                self._gaussian_kernel_size = k
+                self._gaussian_sigma = sigma
+
+            # 复制边缘像素进行手动填充，避免零填充引入伪边界
+            depth_4d = depth_images.unsqueeze(1)  # [N,1,H,W]
+            pad = k // 2
+            depth_4d_padded = torch.nn.functional.pad(
+                depth_4d,
+                pad=(pad, pad, pad, pad),   # (左,右,上,下)
+                mode='replicate'
+            )
+            # 卷积时不再使用padding（已手动pad）
+            depth_images = torch.nn.functional.conv2d(
+                depth_4d_padded,
+                self._gaussian_kernel,
+                padding=0,
+                groups=1
+            ).squeeze(1)  # [N,H,W]
+            print("apply_gaussian_blur")
+
+        
         
     
         return depth_images
@@ -838,7 +898,12 @@ class LeggedRobot(BaseTask):
     def crop_depth_image(self, depth_image):
         # crop 30 pixels from the left and right and and 20 pixels from bottom and return croped image
         # return depth_image[:-2, 4:-4]
-        return depth_image[..., :-2, 4:-4]
+        # return depth_image[..., :-2, 4:-4]
+        # print(f"Original depth image shape: {depth_image.shape}")
+        # return depth_image[..., 80:-80, 80:-80]
+        # return depth_image[..., 2:-2, 15:-2]
+        # return depth_image[..., 5:-5, 60:-5]
+        return depth_image[..., 2:-2, 15:-2]
 
     def update_depth_buffer(self):
         if not self.cfg.depth.use_camera:
@@ -858,7 +923,8 @@ class LeggedRobot(BaseTask):
                                                                 self.cam_handles[i],
                                                                 gymapi.IMAGE_DEPTH)
             raw_depth_images.append(gymtorch.wrap_tensor(depth_image_))
-        
+            # print(f"Raw depth image {i} shape: {depth_image_.shape}")
+
         # 将列表堆叠成一个批次张量
         batch_depth_images = torch.stack(raw_depth_images, dim=0)
         # print(f"batch_depth_images shape: {batch_depth_images.shape}")
@@ -977,12 +1043,13 @@ class LeggedRobot(BaseTask):
                 scale_factor = 10
                 depth_image = self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5
                 height, width = depth_image.shape[:2]
-                new_height = int(height * scale_factor)
-                new_width = int(width * scale_factor)
+                new_height = int(56 * scale_factor)
+                new_width = int(87 * scale_factor)
                 print(new_height, new_width)
 
                 resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
 
+                cv2.resizeWindow(window_name, new_width, new_height)
                 cv2.imshow(window_name, resized_depth_image)
                 # cv2.imshow("Depth Image", self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5)
                 cv2.waitKey(1)
@@ -2297,10 +2364,15 @@ class LeggedRobot(BaseTask):
         self.feet_air_time *= ~contact_filt
         return rew_airTime
     
-    # def _reward_stand_still(self):
-    #     # Penalize motion at zero commands
-    #     return torch.sum(torch.abs(self.dof_pos - self.default_dof_pos), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
+    def _reward_stand_still(self):
+        # Penalize motion at zero commands
+        return torch.sum(torch.abs(self.dof_pos - self.default_dof_pos), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
     
+    def _reward_tracking_lin_vel(self):
+        # Tracking of linear velocity commands (xy axes)
+        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
+        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
+
     # def _reward_no_move_when_command(self):
     #     # 取命令范围阈值
     #     lin_vel_clip = self.cfg.commands.lin_vel_clip if hasattr(self.cfg.commands, 'lin_vel_clip') else 0.1

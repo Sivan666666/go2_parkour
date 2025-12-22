@@ -209,7 +209,7 @@ def play(args):
                         yaw = depth_latent_and_yaw[:, -2:] 
                     # 不使用 yaw 修正,保持原始观测
                     # obs[:, 6:8] = 1.5*yaw  # 注释掉这行
-                    obs[:, 6:8] = 0  # 强制设为0
+                    # obs[:, 6:8] = 0  # 强制设为0
                     obs[:, 6:8] = -env.yaw.unsqueeze(1)
                         
                 else:

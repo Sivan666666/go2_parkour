@@ -105,7 +105,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         position_rand = 0.02  
         angle = [30-5, 30+5]  # positive pitch down  #27-5,27+5
         z_angle = [-2, 2]
-        x_angle = [-2, 2]
+        x_angle = [-5, 1]
         # our designed position
         # position = [0.3, 0, 0.188]  # front camera
         # position_rand = 0.01  
@@ -113,7 +113,9 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         update_interval = 5  # 5 works without retraining, 8 worse
 
-        original = (106, 60)
+        # original = (106, 60)
+        # original = (640, 420)
+        original = (160, 108)
         resized = (87, 58)
 
         # 竖向
@@ -121,8 +123,9 @@ class Go2RoughCfg( LeggedRobotCfg ):
         # resized = (58, 87)
 
         # 🔥 Horizontal FOV 域随机化
-        horizontal_fov = 87  # 基准值
-        horizontal_fov_range = [86, 87, 88]   # 随机范围 86-88 度
+        horizontal_fov = 79  # 基准值
+        horizontal_fov_range = [77, 79, 81]
+        # horizontal_fov_range = [86, 87, 88]   # 随机范围 86-88 度
 
         buffer_len = 2
         
@@ -138,7 +141,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         clip_near_distance = 0.15  # 0.15m以内设为无穷大
 
         # 2. Edge noise: 边缘噪声
-        edge_noise_enable_prob = 0.8  #  80%概率启用边缘噪声
+        edge_noise_enable_prob = 0.1  #  80%概率启用边缘噪声
         edge_noise_prob = 0.5  # 边缘处30%概率设为无穷
         edge_gradient_threshold = 0.3  # 深度梯度阈值(米)
         edge_dilation_kernel_size = 3  # 边缘膨胀核大小
@@ -151,7 +154,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         perlin_noise_evolution_speed = 0.005  # 时间演化速度
 
         #  启用块状空洞 代替 柏林
-        hole_noise_enable_prob = 0.5      # 50% 概率启用块状空洞
+        hole_noise_enable_prob = 0.1      # 50% 概率启用块状空洞
         hole_noise_prob = 0.05        # 5% 区域有空洞
         hole_block_size = 8           # 8×8 像素的块
 
@@ -159,9 +162,9 @@ class Go2RoughCfg( LeggedRobotCfg ):
         blind_spot_left_columns = 0  # 去除左侧5列
 
         # 5. Gaussian noise: 高斯噪声
-        gaussian_noise_enable_prob = 0.6  #  80%概率启用高斯噪声
-        gaussian_noise_std = 0.04
-        gaussian_noise_distance_factor = 0.5
+        gaussian_noise_enable_prob = 0.1  #  80%概率启用高斯噪声
+        gaussian_noise_std = 0.01
+        gaussian_noise_distance_factor = 0.1
 
         # 6. Gaussian Blur: 最终平滑 (新增)
         apply_gaussian_blur = True  # 是否应用高斯模糊
@@ -169,7 +172,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         gaussian_blur_sigma = 1.0  # 标准差(越大越模糊)
 
         # 原有噪声
-        dropout_prob = 0.001
+        dropout_prob = 0.0
         salt_pepper_prob = 0.0
 
 
