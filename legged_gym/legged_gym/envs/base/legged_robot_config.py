@@ -203,10 +203,10 @@ class LeggedRobotCfg(BaseConfig):
         num_cols = 40 # number of terrain cols (types)
         
         terrain_dict = {"smooth slope": 0., 
-                        "rough slope up": 0.0,
-                        "rough slope down": 0.0,
-                        "normal stairs down": 0.,
-                        "normal stairs up": 0.5,
+                        "normal stairs down": 0.0,
+                        "normal stairs up": 0.0,
+                        "steep hollow stairs down": 0.0,
+                        "steep hollow stairs up": 0.5,
                         "discrete": 0., 
                         "stepping stones": 0.0,
                         "gaps": 0., 
@@ -327,14 +327,14 @@ class LeggedRobotCfg(BaseConfig):
     class rewards:
         class scales:
             # tracking rewards
-            tracking_goal_vel = 1.5
+            tracking_goal_vel = 2.5
             tracking_yaw = 0.5
             # regularization rewards
             lin_vel_z = -1.0
             ang_vel_xy = -0.05
             orientation = -1.
             dof_acc = -2.5e-7
-            collision = -10.
+            collision = -7.
             action_rate = -0.1
             delta_torques = -1.0e-7
             torques = -0.00001

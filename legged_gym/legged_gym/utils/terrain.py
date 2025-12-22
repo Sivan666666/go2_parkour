@@ -63,8 +63,8 @@ class Terrain:
             "smooth slope",
             "rough slope up",
             "rough slope down",
-            "normal stairs down",
-            "normal stairs up",
+            "steep hollow stairs down",
+            "steep hollow stairs up",
             "discrete",
             "stepping stones",
             "gaps",
@@ -240,16 +240,9 @@ class Terrain:
             # self.add_roughness(terrain)
         elif choice < self.proportions[2]:
             idx = 2
-            if choice<self.proportions[1]:
-                idx = 3
-                slope *= -1
-            terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.)
-            self.add_roughness(terrain)
-        elif choice < self.proportions[4]:
-            idx = 4
             height = 0.1 + 0.1 * difficulty
-            if choice < self.proportions[3]:
-                idx = 5
+            if choice < self.proportions[1]:
+                idx = 3
                 height *= -1
             # terrain_utils.pyramid_stairs_terrain(terrain, step_width=1., step_height=height, platform_size=3.)
 
@@ -266,6 +259,45 @@ class Terrain:
             terrain_y_flat = 1.6
             stairs_terrain(terrain, step_height=height, platform_size=platform_size, staircase_length=staircase_length, num_goals=self.num_goals, birth_area_length=birth_area_length, step_width=step_width, terrain_y_flat=terrain_y_flat)
             self.add_roughness(terrain, difficulty)
+        elif choice < self.proportions[4]:
+            idx = 4
+            step_height_first = 0.1 + 0.25 * difficulty
+            step_height_others = 0.1 + 0.15 * difficulty
+
+            num_goals = 8
+            num_steps = num_goals - 1
+            #step_width = 0.2  # 20cm
+
+            # step_width: difficulty=0时为0.4m，difficulty=1时为0.2m
+            step_width = 0.4 - 0.2 * difficulty
+            staircase_length = 10.0  # 总楼梯区长度
+            birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
+
+            terrain_y_flat = 1.6 * 1
+            # 计算顶部平台长度
+            platform_size = staircase_length - birth_area_length - step_width * num_steps
+            if platform_size < 0:
+                raise ValueError("楼梯太多或太宽，platform_size为负，请调整参数！")
+
+            if choice<self.proportions[3]:
+                idx = 5 
+                step_height_first *= -1
+                step_height_others *= -1
+            hollow_stairs_terrain(
+                terrain,
+                step_height_first=step_height_first,
+                step_height_others=step_height_others,
+                slope_treshold=self.cfg.slope_treshold,
+                step_thickness=0.035,
+                platform_size=platform_size,
+                staircase_length=staircase_length,
+                num_goals=self.num_goals,
+                birth_area_length=birth_area_length,
+                step_width=step_width,
+                terrain_y_flat=terrain_y_flat,
+                difficulty = difficulty
+            )
+            self.add_roughness(terrain)
         elif choice < self.proportions[5]:
             idx = 6
             num_rectangles = 20
@@ -328,8 +360,8 @@ class Terrain:
             self.add_roughness(terrain, difficulty=1)
         elif choice < self.proportions[13]:
             # step_height = 0.1 + 0.3 * difficulty
-            # step_height = 0.1 + 0.1 * difficulty
-            step_height = 0.15
+            step_height_first = 0.1 + 0.05 * difficulty
+            step_height_others = 0.1 + 0.05 * difficulty
             idx = 13
 
             num_goals = 8
@@ -349,10 +381,12 @@ class Terrain:
 
             if choice<self.proportions[12]:
                 idx = 14 
-                step_height *= -1
+                step_height_first *= -1
+                step_height_others *= -1
             hollow_stairs_terrain(
                 terrain,
-                step_height=step_height,  # 减小每层上升高度为原来的90%
+                step_height_first=step_height_first,
+                step_height_others=step_height_others,
                 slope_treshold=self.cfg.slope_treshold,
                 step_thickness=0.035,
                 platform_size=platform_size,
@@ -698,14 +732,15 @@ def stairs_terrain(terrain, step_height, platform_size=1., staircase_length=5.0,
 
     return terrain
 
-def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0.05, platform_size=1., staircase_length=5.0, num_goals=8, birth_area_length=3.0, step_width=0.4, terrain_y_flat = 1, difficulty = 0):
+def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_treshold, step_thickness=0.05, platform_size=1., staircase_length=5.0, num_goals=8, birth_area_length=3.0, step_width=0.4, terrain_y_flat = 1, difficulty = 0):
     """
     生成一个镂空的楼梯，并可选择性地在其表面添加独立的Perlin噪声起伏。
     噪声生成使用TerrainPerlin，与barrier_track使用相同的逻辑。
     
     Parameters:
         terrain (terrain): 地形对象。
-        step_height (float): 每个台阶的高度（米）。
+        step_height_first (float): 第一个台阶的高度（米）。
+        step_height_others (float): 其他台阶的高度（米）。
         step_thickness (float): 台阶厚度（米）。
         platform_size (float): 地形末端顶部平坦区域的大小（米）。
         staircase_length (float): 楼梯在前进方向（X轴）上的总长度（米）。
@@ -824,6 +859,11 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
     # print("terrain_width_m:", terrain_width_m)
     step_width_m = step_width_px * terrain.horizontal_scale
 
+    rail_thickness = 0.03
+    rail_mid = rail_thickness / 2
+    rail_L_y = terrain_y_flat + rail_mid
+    rail_R_y = terrain_length_m - terrain_y_flat - rail_mid
+    step_mid = step_thickness / 2
     width_px_for_roughness = end_y-start_y-1
     step_resolution = (
         np.ceil(step_width_px).astype(int),
@@ -832,17 +872,30 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
 
     heightsamples = terrain.height_field_raw.copy()
     heightsamples[:, :] = 0
-
+    step_end_x_m = birth_area_length + step_width_m * num_steps
     for i in range(num_steps):
-        current_height_m += step_height
+        if i == 0:
+            current_height_m += step_height_first
+        else:
+            current_height_m += step_height_others
         
         center_x_m = (current_x_pos_px + step_width_px / 2.0) * terrain.horizontal_scale
         center_y_m = terrain_length_m / 2.0
         center_z_m = current_height_m - step_thickness / 2.0 # 厚度补充
-        
+        current_x_pos_m = current_x_pos_px * terrain.horizontal_scale
+        if i == 1:
+            back_rail_z = current_height_m + rail_mid
         vertices, triangles = trimesh.box_trimesh(
             size=(step_width_m, terrain_length_m - 2*terrain_y_flat, step_thickness),
             center_position=(center_x_m, center_y_m, center_z_m)
+        )
+        rail_to_end_L = trimesh.box_trimesh(
+            size=(step_end_x_m - current_x_pos_m - step_width_m, rail_thickness, step_thickness),
+            center_position=((step_end_x_m + current_x_pos_m + step_width_m) / 2, rail_L_y, current_height_m - step_mid)
+        )
+        rail_to_end_R = trimesh.box_trimesh(
+            size=(step_end_x_m - current_x_pos_m - step_width_m, rail_thickness, step_thickness),
+            center_position=((step_end_x_m + current_x_pos_m + step_width_m) / 2, rail_R_y, current_height_m - step_mid)
         )
         heightfield_raw = np.zeros(step_resolution, dtype=np.float32)
         heightfield_raw[:, 0: width_px_for_roughness] = current_height_m / terrain.vertical_scale  # 填充当前台阶高度
@@ -867,6 +920,8 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         final_trimesh = trimesh.combine_trimeshes(
                 trimesh_template,
                 step_trimesh,
+                rail_to_end_L,
+                rail_to_end_R
             )
         # final_trimesh = step_trimesh
         terrain.trimeshes.append(final_trimesh)
@@ -876,10 +931,10 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         current_x_pos_px += step_width_px
 
     # --- 5. 创建顶部平台 ---
-    current_height_m += step_height
-    platform_width_px = staircase_length_px - current_x_pos_px
+    current_height_m += step_height_others
+    platform_width_px = min(staircase_length_px - current_x_pos_px, 6 * step_width_px)
     platform_width_m = platform_width_px * terrain.horizontal_scale
-    
+
     platform_center_x_m = (current_x_pos_px + platform_width_px / 2.0) * terrain.horizontal_scale
     platform_center_y_m = terrain_length_m / 2.0
     platform_center_z_m = current_height_m - step_thickness / 2.0
@@ -888,7 +943,7 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         np.ceil(platform_width_px).astype(int),
         np.ceil(width_px_for_roughness).astype(int)
     )
-    if step_height < 0:
+    if step_height_others < 0:
         terrain.height_field_raw[:, :] = current_height_m / terrain.vertical_scale  # 挖洞
         terrain.height_field_raw[0: birth_area_length_px, 0: terrain.length] = 0
 
@@ -932,7 +987,10 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
     # 设置最后一个waypoint在楼梯的前面一点点
     goals_m.append([(current_x_pos_px + 3 * step_width_px) * terrain.horizontal_scale, platform_center_y_m, current_height_m])
 
-        # -------------加入栏杆（古法纯手写)----------------
+
+    # ------  6.加入栏杆和后部长方形横杆组  --------
+
+    #栏杆
     # L实则为狗前进方向的R，R同理（因为我写代码默认L是减去，R是增加
     def bar_trimesh(center_position, delta_x, delta_z):
         vertices = np.empty((8, 3), dtype= np.float32)
@@ -987,12 +1045,8 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
 
         return vertices, triangles
 
-    rail_thickness = 0.03
-    rail_mid = rail_thickness / 2
     rail_height = 0.6
-    rail_L_y = terrain_y_flat + rail_mid
-    rail_R_y = terrain_length_m - terrain_y_flat - rail_mid
-    rail_height_short = rail_height + step_height
+    rail_height_short = rail_height + step_height_first
     rail_height_tall = rail_height + current_height_m
     current_x_pos_m = (current_x_pos_px) * terrain.horizontal_scale
 
@@ -1004,13 +1058,16 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         size=(rail_thickness, rail_thickness, rail_height_short),
         center_position=(birth_area_length + rail_mid, rail_R_y, rail_height_short / 2)
     )
+    delta_minus_rail_height = step_height_first - step_thickness
+    rail_height_tall_adjusted = rail_height_tall - delta_minus_rail_height
+    rail_height_tall_z_adjusted = rail_height_tall / 2 + delta_minus_rail_height / 2
     Up_L = trimesh.box_trimesh(
-        size=(rail_thickness, rail_thickness, rail_height_tall),
-        center_position=(current_x_pos_m + rail_mid, rail_L_y, rail_height_tall / 2)
+        size=(rail_thickness, rail_thickness, rail_height_tall_adjusted),
+        center_position=(current_x_pos_m + rail_mid, rail_L_y, rail_height_tall_z_adjusted)
     )
     Up_R = trimesh.box_trimesh(
-        size=(rail_thickness, rail_thickness, rail_height_tall),
-        center_position=(current_x_pos_m + rail_mid, rail_R_y, rail_height_tall / 2)
+        size=(rail_thickness, rail_thickness, rail_height_tall_adjusted),
+        center_position=(current_x_pos_m + rail_mid, rail_R_y, rail_height_tall_z_adjusted)
     )
     Up_Back_L = trimesh.box_trimesh(
         size=(rail_thickness, rail_thickness, rail_height_tall),
@@ -1041,10 +1098,10 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         center_position=(current_x_pos_m + platform_width_m / 2, rail_R_y, Up_Bar_2_z)
     )
     
-    bar_tangent = step_height / step_width_m
+    bar_tangent = step_height_others / step_width_m
     bar_x = step_width_m * 7 - rail_thickness
     bar_z = bar_x * bar_tangent
-    Bar_1_z = (step_height + rail_thickness * bar_tangent + current_height_m) / 2 + rail_thickness / 2
+    Bar_1_z = (step_height_first + rail_thickness * bar_tangent + current_height_m) / 2 + rail_thickness / 2
     Bar_3_z = (rail_height_tall + rail_height_short + rail_thickness * bar_tangent) / 2 - rail_thickness / 2
     Bar_2_z = (Bar_1_z + Bar_3_z) / 2
     Bar_L1 = bar_trimesh(
@@ -1119,9 +1176,54 @@ def hollow_stairs_terrain(terrain, step_height, slope_treshold, step_thickness=0
         con_R,
     )
     terrain.trimeshes.append(final_siderail)
+
+    # 后部长方形横杆组
+    back_rail_F = trimesh.box_trimesh(
+        size=(rail_thickness, terrain_length_m - 2 * terrain_y_flat, rail_thickness),
+        center_position=(current_x_pos_m + rail_mid, center_y_m, back_rail_z)
+    )
+    back_rail_B = trimesh.box_trimesh(
+        size=(rail_thickness, terrain_length_m - 2 * terrain_y_flat, rail_thickness),
+        center_position=(current_x_pos_m + platform_width_m - rail_mid, center_y_m, back_rail_z)
+    )
+    back_rail_L_out = trimesh.box_trimesh(
+        size=(platform_width_m - rail_thickness * 2, rail_thickness, rail_thickness),
+        center_position=(current_x_pos_m + platform_width_m / 2, rail_L_y, back_rail_z)
+    )
+    back_rail_R_out = trimesh.box_trimesh(
+        size=(platform_width_m - rail_thickness * 2, rail_thickness, rail_thickness),
+        center_position=(current_x_pos_m + platform_width_m / 2, rail_R_y, back_rail_z)
+    )
+    back_rail_L_in = trimesh.box_trimesh(
+        size=(platform_width_m - rail_thickness * 2, rail_thickness, rail_thickness),
+        center_position=(current_x_pos_m + platform_width_m / 2, rail_L_y + rail_thickness, back_rail_z)
+    )
+    back_rail_R_in = trimesh.box_trimesh(
+        size=(platform_width_m - rail_thickness * 2, rail_thickness, rail_thickness),
+        center_position=(current_x_pos_m + platform_width_m / 2, rail_R_y - rail_thickness, back_rail_z)
+    )
+    back_rail_L_out_downward = trimesh.box_trimesh(
+        size=(platform_width_m - rail_thickness * 2, rail_thickness, step_thickness),
+        center_position=(current_x_pos_m + platform_width_m / 2, rail_L_y, step_height_first - step_mid)
+    )
+    back_rail_R_out_downward = trimesh.box_trimesh(
+        size=(platform_width_m - rail_thickness * 2, rail_thickness, step_thickness),
+        center_position=(current_x_pos_m + platform_width_m / 2, rail_R_y, step_height_first - step_mid)
+    )
+    final_backrail = trimesh.combine_trimeshes(
+        back_rail_F,
+        back_rail_B,
+        back_rail_L_out,
+        back_rail_R_out,
+        back_rail_L_in,
+        back_rail_R_in,
+        back_rail_L_out_downward,
+        back_rail_R_out_downward,
+    )
+    terrain.trimeshes.append(final_backrail)
     # ---------------------------------------
 
-    # --- 6. 赋值 ---
+    # --- 7. 赋值 ---
     terrain.goals = np.array(goals_m)
 
     terrain.heightsamples[:, :] = heightsamples[:, :]
