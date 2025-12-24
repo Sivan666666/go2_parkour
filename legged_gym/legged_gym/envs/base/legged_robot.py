@@ -887,7 +887,7 @@ class LeggedRobot(BaseTask):
                 padding=0,
                 groups=1
             ).squeeze(1)  # [N,H,W]
-            print("apply_gaussian_blur")
+            # print("apply_gaussian_blur")
 
         
         

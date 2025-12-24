@@ -324,7 +324,9 @@ def play(args):
 
         print("time:", env.episode_length_buf[env.lookat_id].item() / 50, 
               "cmd vx", env.commands[env.lookat_id, 0].item(),
-              "actual vx", env.base_lin_vel[env.lookat_id, 0].item(), 
+              "actual vx", env.base_lin_vel[env.lookat_id, 0].item(),
+              "actual vy", env.base_lin_vel[env.lookat_id, 1].item(),
+              "actual vz", env.base_lin_vel[env.lookat_id, 2].item(),
               "pos x", env.root_states[env.lookat_id, 0].item(),
               "pos y", env.root_states[env.lookat_id, 1].item() )
         
