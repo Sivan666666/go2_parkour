@@ -97,9 +97,9 @@ def play(args):
 
     env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
                                     "normal stairs down": 0.0,
-                                    "normal stairs up": 0.5,
+                                    "normal stairs up": 0.,
                                     "steep hollow stairs down": 0.0,
-                                    "steep hollow stairs up": 0.0,
+                                    "steep hollow stairs up": 0.5,
                                     "discrete": 0., 
                                     "stepping stones": 0.0,
                                     "gaps": 0., 
@@ -250,10 +250,10 @@ def play(args):
                         obs_student[:, 6:8] = 0
                         depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
                         depth_latent = depth_latent_and_yaw[:, :-2]
-                        yaw = depth_latent_and_yaw[:, -2:] 
+                        depth_yaw = depth_latent_and_yaw[:, -2:] * 1.5
                     # 不使用 yaw 修正，保持原始观测
-                    # obs[:, 6:8] = 1.5*yaw  # 注释掉这行
-                    obs[:, 6:8] = -env.yaw.unsqueeze(1)  # [num_envs, 2] 两列都填 -yaw  # 强制设为0
+                    # obs[:, 6:8] = 1.5*depth_yaw  # 注释掉这行
+                    obs[:, 6:8] = -env.yaw.unsqueeze(1)   # [num_envs, 2] 两列都填 -yaw  # 强制设为0
 
                     # look_id = env.lookat_id
                     # print("env.yaw[look_id]:", env.yaw[look_id].item())
@@ -291,9 +291,12 @@ def play(args):
         denom = 1.0 - 2.0*(y*y + z*z)
         yaw = np.arctan2(2.0*(w*z + x*y), denom)
         yaw_hist.append(float(yaw))
+        # yaw_hist.append(depth_yaw[look_id, 0].item())
+
 
         # 观测中的 delta_yaw（目标-当前），换成期望 yaw 便于对比
         delta_yaw = -env.yaw[look_id].item()  # 与 obs[:,6] 一致
+        # delta_yaw = obs[look_id, 6].item() 
         # print("delta_yaw (=-yaw):", delta_yaw)
         yaw_desired = yaw + delta_yaw
         yaw_cmd_hist.append(yaw_desired)

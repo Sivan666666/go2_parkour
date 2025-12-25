@@ -273,7 +273,7 @@ class Terrain:
             staircase_length = 10.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
 
-            terrain_y_flat = 1.2 
+            terrain_y_flat = 1.6
             # 计算顶部平台长度
             platform_size = staircase_length - birth_area_length - step_width * num_steps
             if platform_size < 0:
@@ -985,7 +985,7 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
 
     # goals_m.append([platform_center_x_m, platform_center_y_m, current_height_m])
     # 设置最后一个waypoint在楼梯的前面一点点
-    goals_m.append([(current_x_pos_px + 3 * step_width_px) * terrain.horizontal_scale, platform_center_y_m, current_height_m])
+    goals_m.append([(current_x_pos_px + 2 * step_width_px) * terrain.horizontal_scale, platform_center_y_m, current_height_m])
 
 
     # ------  6.加入栏杆和后部长方形横杆组  --------
