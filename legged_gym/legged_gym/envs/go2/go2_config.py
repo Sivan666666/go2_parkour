@@ -185,7 +185,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         class scales:
             # tracking rewards
             tracking_goal_vel = 2.5
-            tracking_yaw = 0.5
+            tracking_yaw = 0.25
             # regularization rewards
             lin_vel_z = -1.0
             ang_vel_xy = -0.05
