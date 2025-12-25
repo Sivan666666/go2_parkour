@@ -1099,7 +1099,7 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
     )
     
     bar_tangent = step_height_others / step_width_m
-    bar_x = step_width_m * 7 - rail_thickness
+    bar_x = step_width_m * num_steps - rail_thickness
     bar_z = bar_x * bar_tangent
     Bar_1_z = (step_height_first + rail_thickness * bar_tangent + current_height_m) / 2 + rail_thickness / 2
     Bar_3_z = (rail_height_tall + rail_height_short + rail_thickness * bar_tangent) / 2 - rail_thickness / 2
