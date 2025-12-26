@@ -320,7 +320,7 @@ class Terrain:
         elif choice < self.proportions[8]:
             # print("flat terrain")
             idx = 9
-            flat_terrain(terrain)
+            flat_terrain(terrain, self.num_goals)
             self.add_roughness(terrain)
             # pass
         elif choice < self.proportions[9]:

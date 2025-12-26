@@ -99,7 +99,7 @@ def play(args):
                                     "normal stairs down": 0.0,
                                     "normal stairs up": 0.,
                                     "steep hollow stairs down": 0.0,
-                                    "steep hollow stairs up": 0.5,
+                                    "steep hollow stairs up": 0.,
                                     "discrete": 0., 
                                     "stepping stones": 0.0,
                                     "gaps": 0., 
@@ -333,6 +333,23 @@ def play(args):
               "pos x", env.root_states[env.lookat_id, 0].item(),
               "pos y", env.root_states[env.lookat_id, 1].item() )
         
+        # 🔥 打印深度图相关的延迟信息
+        if env.cfg.depth.use_camera:
+            look_id = env.lookat_id  # 这已经是 int 类型
+            delay_step = env.depth_delay_count[look_id].item()
+            depth_counter = env.depth_counter[look_id].item()
+            global_counter = env.global_counter
+            effective_counter = depth_counter - delay_step
+            next_update_in = (env.cfg.depth.update_interval - (effective_counter % env.cfg.depth.update_interval)) % env.cfg.depth.update_interval
+            
+            # 🔥 修复：look_id 已经是 int，不需要 .item()
+            print(f"[Depth Info] Env#{look_id}: "
+                  f"delay={delay_step} steps | "
+                  f"depth_counter={depth_counter} | "
+                  f"global_counter={global_counter} | "
+                  f"effective_counter={effective_counter} | "
+                  f"next_update_in={next_update_in} steps")
+
         id = env.lookat_id
         
 
