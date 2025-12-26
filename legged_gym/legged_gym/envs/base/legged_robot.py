@@ -788,22 +788,37 @@ class LeggedRobot(BaseTask):
         return depth_image
     
     def process_depth_image(self, depth_images, env_ids=None):
-        """处理深度图像 (全 GPU 优化版本)"""
+        """处理深度图像 (全 GPU 优化版本 + 性能分析)"""
+        import time
         
+        # 🔥 性能统计初始化
+        if not hasattr(self, '_depth_timing_counter'):
+            self._depth_timing_counter = 0
+            self._depth_timing_accumulator = {}
+        
+        total_start = time.time()
+        timings = {}
+        
+        # 0) 预处理
+        t0 = time.time()
         depth_images = self.crop_depth_image(depth_images)
-        depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]     
+        depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]
+        timings['0_preprocessing'] = (time.time() - t0) * 1000
 
-        # 🔥 使用缓存的参数
+        # 使用缓存的参数
         params = self._depth_proc_params
         
         if params['enable_noise']:
             # 1) 近距离置为 -far_clip
+            t0 = time.time()
             distance = torch.abs(depth_images)
             near_mask = distance < params['clip_near_distance']
             depth_images = depth_images.clone()
             depth_images[near_mask] = -self.cfg.depth.far_clip
+            timings['1_near_clip'] = (time.time() - t0) * 1000
 
             # 获取当前批次的噪声标志
+            t0 = time.time()
             if env_ids is not None:
                 has_gaussian = self.env_has_gaussian_noise[env_ids]
                 has_edge = self.env_has_edge_noise[env_ids]
@@ -812,9 +827,11 @@ class LeggedRobot(BaseTask):
                 has_gaussian = self.env_has_gaussian_noise
                 has_edge = self.env_has_edge_noise
                 has_hole = self.env_has_hole_noise
+            timings['2_get_noise_flags'] = (time.time() - t0) * 1000
 
             # 2) 高斯噪声
             if params['gaussian_noise_std'] > 0:
+                t0 = time.time()
                 distance = torch.abs(depth_images)
                 valid_mask = distance <= 3.0
                 adaptive_std = params['gaussian_noise_std'] * (1.0 + params['gaussian_noise_distance_factor'] * distance)
@@ -824,10 +841,16 @@ class LeggedRobot(BaseTask):
 
                 apply_mask = has_gaussian[:, None, None].expand_as(depth_images)
                 depth_images[apply_mask] = depth_images[apply_mask] + gaussian_noise[apply_mask]
+                timings['3_gaussian_noise'] = (time.time() - t0) * 1000
+            else:
+                timings['3_gaussian_noise'] = 0.0
 
             # 3) 边缘噪声
             if params['edge_noise_prob'] > 0:
-                # 计算梯度
+                t0 = time.time()
+                
+                # 3.1) 计算梯度
+                t1 = time.time()
                 grad_x = torch.zeros_like(depth_images)
                 grad_x[:, :, 1:-1] = (depth_images[:, :, 2:] - depth_images[:, :, :-2]) / 2
                 grad_x[:, :, 0] = depth_images[:, :, 1] - depth_images[:, :, 0]
@@ -837,63 +860,105 @@ class LeggedRobot(BaseTask):
                 grad_y[:, 1:-1, :] = (depth_images[:, 2:, :] - depth_images[:, :-2, :]) / 2
                 grad_y[:, 0, :] = depth_images[:, 1, :] - depth_images[:, 0, :]
                 grad_y[:, -1, :] = depth_images[:, -1, :] - depth_images[:, -2, :]
+                timings['4a_edge_gradient'] = (time.time() - t1) * 1000
 
+                # 3.2) 边缘检测
+                t1 = time.time()
                 gradient_magnitude = torch.sqrt(grad_x ** 2 + grad_y ** 2)
                 edge_mask = gradient_magnitude > params['edge_gradient_threshold']
+                timings['4b_edge_detection'] = (time.time() - t1) * 1000
 
-                # 膨胀
+                # 3.3) 膨胀
+                t1 = time.time()
                 kernel_size = params['edge_dilation_kernel_size']
                 edge_4d = edge_mask.float().unsqueeze(1)
                 edge_dilated = F.max_pool2d(
                     edge_4d, kernel_size=kernel_size, stride=1, padding=kernel_size // 2
                 ).squeeze(1).bool()
+                timings['4c_edge_dilation'] = (time.time() - t1) * 1000
 
+                # 3.4) 应用噪声
+                t1 = time.time()
                 random_mask = torch.rand_like(depth_images) < params['edge_noise_prob']
                 edge_noise_mask = edge_dilated & random_mask
-
                 apply_mask = has_edge[:, None, None].expand_as(depth_images)
                 depth_images[edge_noise_mask & apply_mask] = -self.cfg.depth.far_clip
+                timings['4d_edge_apply'] = (time.time() - t1) * 1000
+
+                timings['4_edge_noise_total'] = (time.time() - t0) * 1000
+            else:
+                timings['4_edge_noise_total'] = 0.0
 
             # 4) 块状随机空洞
             if params['hole_noise_prob'] > 0:
+                t0 = time.time()
                 N, H, W = depth_images.shape
                 hole_size = params['hole_block_size']
                 sparse_h, sparse_w = max(H // hole_size, 1), max(W // hole_size, 1)
 
+                t1 = time.time()
                 sparse_mask = torch.rand(N, sparse_h, sparse_w, device=self.device) < params['hole_noise_prob']
+                timings['5a_hole_sparse_mask'] = (time.time() - t1) * 1000
+
+                t1 = time.time()
                 hole_mask = F.interpolate(
                     sparse_mask.float().unsqueeze(1), size=(H, W), mode='nearest'
                 ).squeeze(1).bool()
+                timings['5b_hole_interpolate'] = (time.time() - t1) * 1000
 
+                t1 = time.time()
                 apply_mask = has_hole[:, None, None].expand_as(depth_images)
                 depth_images[hole_mask & apply_mask] = -self.cfg.depth.far_clip
+                timings['5c_hole_apply'] = (time.time() - t1) * 1000
+
+                timings['5_hole_noise_total'] = (time.time() - t0) * 1000
+            else:
+                timings['5_hole_noise_total'] = 0.0
 
             # 5) Dropout
             if params['dropout_prob'] > 0:
+                t0 = time.time()
                 dropout_mask = torch.rand_like(depth_images) < params['dropout_prob']
                 depth_images[dropout_mask] = -self.cfg.depth.far_clip
+                timings['6_dropout'] = (time.time() - t0) * 1000
+            else:
+                timings['6_dropout'] = 0.0
 
             # 6) 椒盐噪声
             if params['salt_pepper_prob'] > 0:
+                t0 = time.time()
                 p = params['salt_pepper_prob'] / 2
                 salt_mask = torch.rand_like(depth_images) < p
                 pepper_mask = torch.rand_like(depth_images) < p
                 depth_images[salt_mask] = -self.cfg.depth.far_clip
                 depth_images[pepper_mask] = -self.cfg.depth.near_clip
+                timings['7_salt_pepper'] = (time.time() - t0) * 1000
+            else:
+                timings['7_salt_pepper'] = 0.0
 
-            
-        
         # Clip 到有效范围
-        depth_images = torch.clip(depth_images , -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
+        t0 = time.time()
+        depth_images = torch.clip(depth_images, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
+        timings['8_final_clip'] = (time.time() - t0) * 1000
+
+        # 归一化
+        t0 = time.time()
         depth_images = self.normalize_depth_image(depth_images)
+        timings['9_normalize'] = (time.time() - t0) * 1000
+
+        # Resize
+        t0 = time.time()
         depth_images = resize2d(depth_images.unsqueeze(1), (self.cfg.depth.resized[1], self.cfg.depth.resized[0])).squeeze(1)
-        
+        timings['10_resize'] = (time.time() - t0) * 1000
+
         # 7) 高斯模糊
         if params['apply_gaussian_blur']:
+            t0 = time.time()
             k = params['gaussian_blur_kernel_size']
             sigma = params['gaussian_blur_sigma']
 
-            # 缓存核，避免重复构建
+            # 缓存核
+            t1 = time.time()
             if (not hasattr(self, "_gaussian_kernel")
                 or getattr(self, "_gaussian_kernel_size", None) != k
                 or getattr(self, "_gaussian_sigma", None) != sigma):
@@ -901,31 +966,284 @@ class LeggedRobot(BaseTask):
                 gauss_1d = torch.exp(-x ** 2 / (2 * sigma ** 2))
                 gauss_1d = gauss_1d / gauss_1d.sum()
                 gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
-                self._gaussian_kernel = gauss_2d.view(1, 1, k, k)  # [1,1,k,k]
+                self._gaussian_kernel = gauss_2d.view(1, 1, k, k)
                 self._gaussian_kernel_size = k
                 self._gaussian_sigma = sigma
+            timings['11a_gaussian_kernel_cache'] = (time.time() - t1) * 1000
 
-            # 复制边缘像素进行手动填充，避免零填充引入伪边界
-            depth_4d = depth_images.unsqueeze(1)  # [N,1,H,W]
+            # Padding
+            t1 = time.time()
+            depth_4d = depth_images.unsqueeze(1)
             pad = k // 2
-            depth_4d_padded = torch.nn.functional.pad(
+            depth_4d_padded = F.pad(
                 depth_4d,
-                pad=(pad, pad, pad, pad),   # (左,右,上,下)
+                pad=(pad, pad, pad, pad),
                 mode='replicate'
             )
-            # 卷积时不再使用padding（已手动pad）
-            depth_images = torch.nn.functional.conv2d(
+            timings['11b_gaussian_padding'] = (time.time() - t1) * 1000
+
+            # 卷积
+            t1 = time.time()
+            depth_images = F.conv2d(
                 depth_4d_padded,
                 self._gaussian_kernel,
                 padding=0,
                 groups=1
-            ).squeeze(1)  # [N,H,W]
-            # print("apply_gaussian_blur")
+            ).squeeze(1)
+            timings['11c_gaussian_conv'] = (time.time() - t1) * 1000
+
+            timings['11_gaussian_blur_total'] = (time.time() - t0) * 1000
+        else:
+            timings['11_gaussian_blur_total'] = 0.0
+
+        timings['TOTAL'] = (time.time() - total_start) * 1000
+
+        # 🔥 累积统计
+        for key, value in timings.items():
+            if key not in self._depth_timing_accumulator:
+                self._depth_timing_accumulator[key] = 0.0
+            self._depth_timing_accumulator[key] += value
+        
+        self._depth_timing_counter += 1
+
+        # 每 100 次打印一次统计
+        # if self._depth_timing_counter % 10 == 0:
+        #     self._print_depth_timing_statistics()
+
+        return depth_images
+
+    def _print_depth_timing_statistics(self):
+        """打印深度图处理性能统计"""
+        print("\n" + "="*100)
+        print(f"🔥 深度图处理性能分析 (平均值, 基于 {self._depth_timing_counter} 次调用)")
+        print("="*100)
+
+        total_time = self._depth_timing_accumulator.get('TOTAL', 0) / self._depth_timing_counter
+
+        # 主要步骤
+        main_steps = [
+            ('0_preprocessing', '预处理(裁剪+噪声)'),
+            ('1_near_clip', '近距离裁剪'),
+            ('2_get_noise_flags', '获取噪声标志'),
+            ('3_gaussian_noise', '高斯噪声'),
+            ('4_edge_noise_total', '边缘噪声(总计)'),
+            ('5_hole_noise_total', '块状空洞(总计)'),
+            ('6_dropout', 'Dropout噪声'),
+            ('7_salt_pepper', '椒盐噪声'),
+            ('8_final_clip', '最终裁剪'),
+            ('9_normalize', '归一化'),
+            ('10_resize', 'Resize'),
+            ('11_gaussian_blur_total', '高斯模糊(总计)'),
+        ]
+
+        print("\n📊 主要处理步骤:")
+        print("-"*100)
+        for key, desc in main_steps:
+            if key in self._depth_timing_accumulator:
+                avg_time = self._depth_timing_accumulator[key] / self._depth_timing_counter
+                percentage = (avg_time / total_time * 100) if total_time > 0 else 0
+                print(f"  {desc:.<50} {avg_time:>10.4f} ms  ({percentage:>5.1f}%)")
+
+        # 边缘噪声详细分解
+        edge_keys = [
+            ('4a_edge_gradient', '  └─ 梯度计算'),
+            ('4b_edge_detection', '  └─ 边缘检测'),
+            ('4c_edge_dilation', '  └─ 形态学膨胀'),
+            ('4d_edge_apply', '  └─ 应用噪声'),
+        ]
+        
+        if any(k in self._depth_timing_accumulator for k, _ in edge_keys):
+            print("\n📊 边缘噪声详细分解:")
+            print("-"*100)
+            edge_total = self._depth_timing_accumulator.get('4_edge_noise_total', 0) / self._depth_timing_counter
+            for key, desc in edge_keys:
+                if key in self._depth_timing_accumulator:
+                    avg_time = self._depth_timing_accumulator[key] / self._depth_timing_counter
+                    percentage = (avg_time / edge_total * 100) if edge_total > 0 else 0
+                    print(f"  {desc:.<50} {avg_time:>10.4f} ms  ({percentage:>5.1f}%)")
+
+        # 块状空洞详细分解
+        hole_keys = [
+            ('5a_hole_sparse_mask', '  └─ 稀疏掩码生成'),
+            ('5b_hole_interpolate', '  └─ 插值放大'),
+            ('5c_hole_apply', '  └─ 应用噪声'),
+        ]
+        
+        if any(k in self._depth_timing_accumulator for k, _ in hole_keys):
+            print("\n📊 块状空洞详细分解:")
+            print("-"*100)
+            hole_total = self._depth_timing_accumulator.get('5_hole_noise_total', 0) / self._depth_timing_counter
+            for key, desc in hole_keys:
+                if key in self._depth_timing_accumulator:
+                    avg_time = self._depth_timing_accumulator[key] / self._depth_timing_counter
+                    percentage = (avg_time / hole_total * 100) if hole_total > 0 else 0
+                    print(f"  {desc:.<50} {avg_time:>10.4f} ms  ({percentage:>5.1f}%)")
+
+        # 高斯模糊详细分解
+        gaussian_keys = [
+            ('11a_gaussian_kernel_cache', '  └─ 核缓存检查'),
+            ('11b_gaussian_padding', '  └─ 边缘填充'),
+            ('11c_gaussian_conv', '  └─ 卷积运算'),
+        ]
+        
+        if any(k in self._depth_timing_accumulator for k, _ in gaussian_keys):
+            print("\n📊 高斯模糊详细分解:")
+            print("-"*100)
+            gaussian_total = self._depth_timing_accumulator.get('11_gaussian_blur_total', 0) / self._depth_timing_counter
+            for key, desc in gaussian_keys:
+                if key in self._depth_timing_accumulator:
+                    avg_time = self._depth_timing_accumulator[key] / self._depth_timing_counter
+                    percentage = (avg_time / gaussian_total * 100) if gaussian_total > 0 else 0
+                    print(f"  {desc:.<50} {avg_time:>10.4f} ms  ({percentage:>5.1f}%)")
+
+        print("\n📊 总计:")
+        print("-"*100)
+        print(f"  {'总处理时间':.<50} {total_time:>10.4f} ms")
+        print("="*100 + "\n")
+
+        # 重置计数器
+        self._depth_timing_counter = 0
+        self._depth_timing_accumulator = {}
+    
+    # def process_depth_image(self, depth_images, env_ids=None):
+    #     """处理深度图像 (全 GPU 优化版本)"""
+        
+    #     depth_images = self.crop_depth_image(depth_images)
+    #     depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]     
+
+    #     # 🔥 使用缓存的参数
+    #     params = self._depth_proc_params
+        
+    #     if params['enable_noise']:
+    #         # 1) 近距离置为 -far_clip
+    #         distance = torch.abs(depth_images)
+    #         near_mask = distance < params['clip_near_distance']
+    #         depth_images = depth_images.clone()
+    #         depth_images[near_mask] = -self.cfg.depth.far_clip
+
+    #         # 获取当前批次的噪声标志
+    #         if env_ids is not None:
+    #             has_gaussian = self.env_has_gaussian_noise[env_ids]
+    #             has_edge = self.env_has_edge_noise[env_ids]
+    #             has_hole = self.env_has_hole_noise[env_ids]
+    #         else:
+    #             has_gaussian = self.env_has_gaussian_noise
+    #             has_edge = self.env_has_edge_noise
+    #             has_hole = self.env_has_hole_noise
+
+    #         # 2) 高斯噪声
+    #         if params['gaussian_noise_std'] > 0:
+    #             distance = torch.abs(depth_images)
+    #             valid_mask = distance <= 3.0
+    #             adaptive_std = params['gaussian_noise_std'] * (1.0 + params['gaussian_noise_distance_factor'] * distance)
+
+    #             gaussian_noise = torch.randn_like(depth_images) * adaptive_std
+    #             gaussian_noise[~valid_mask] = 0.0
+
+    #             apply_mask = has_gaussian[:, None, None].expand_as(depth_images)
+    #             depth_images[apply_mask] = depth_images[apply_mask] + gaussian_noise[apply_mask]
+
+    #         # 3) 边缘噪声
+    #         if params['edge_noise_prob'] > 0:
+    #             # 计算梯度
+    #             grad_x = torch.zeros_like(depth_images)
+    #             grad_x[:, :, 1:-1] = (depth_images[:, :, 2:] - depth_images[:, :, :-2]) / 2
+    #             grad_x[:, :, 0] = depth_images[:, :, 1] - depth_images[:, :, 0]
+    #             grad_x[:, :, -1] = depth_images[:, :, -1] - depth_images[:, :, -2]
+
+    #             grad_y = torch.zeros_like(depth_images)
+    #             grad_y[:, 1:-1, :] = (depth_images[:, 2:, :] - depth_images[:, :-2, :]) / 2
+    #             grad_y[:, 0, :] = depth_images[:, 1, :] - depth_images[:, 0, :]
+    #             grad_y[:, -1, :] = depth_images[:, -1, :] - depth_images[:, -2, :]
+
+    #             gradient_magnitude = torch.sqrt(grad_x ** 2 + grad_y ** 2)
+    #             edge_mask = gradient_magnitude > params['edge_gradient_threshold']
+
+    #             # 膨胀
+    #             kernel_size = params['edge_dilation_kernel_size']
+    #             edge_4d = edge_mask.float().unsqueeze(1)
+    #             edge_dilated = F.max_pool2d(
+    #                 edge_4d, kernel_size=kernel_size, stride=1, padding=kernel_size // 2
+    #             ).squeeze(1).bool()
+
+    #             random_mask = torch.rand_like(depth_images) < params['edge_noise_prob']
+    #             edge_noise_mask = edge_dilated & random_mask
+
+    #             apply_mask = has_edge[:, None, None].expand_as(depth_images)
+    #             depth_images[edge_noise_mask & apply_mask] = -self.cfg.depth.far_clip
+
+    #         # 4) 块状随机空洞
+    #         if params['hole_noise_prob'] > 0:
+    #             N, H, W = depth_images.shape
+    #             hole_size = params['hole_block_size']
+    #             sparse_h, sparse_w = max(H // hole_size, 1), max(W // hole_size, 1)
+
+    #             sparse_mask = torch.rand(N, sparse_h, sparse_w, device=self.device) < params['hole_noise_prob']
+    #             hole_mask = F.interpolate(
+    #                 sparse_mask.float().unsqueeze(1), size=(H, W), mode='nearest'
+    #             ).squeeze(1).bool()
+
+    #             apply_mask = has_hole[:, None, None].expand_as(depth_images)
+    #             depth_images[hole_mask & apply_mask] = -self.cfg.depth.far_clip
+
+    #         # 5) Dropout
+    #         if params['dropout_prob'] > 0:
+    #             dropout_mask = torch.rand_like(depth_images) < params['dropout_prob']
+    #             depth_images[dropout_mask] = -self.cfg.depth.far_clip
+
+    #         # 6) 椒盐噪声
+    #         if params['salt_pepper_prob'] > 0:
+    #             p = params['salt_pepper_prob'] / 2
+    #             salt_mask = torch.rand_like(depth_images) < p
+    #             pepper_mask = torch.rand_like(depth_images) < p
+    #             depth_images[salt_mask] = -self.cfg.depth.far_clip
+    #             depth_images[pepper_mask] = -self.cfg.depth.near_clip
+
+            
+        
+    #     # Clip 到有效范围
+    #     depth_images = torch.clip(depth_images , -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
+    #     depth_images = self.normalize_depth_image(depth_images)
+    #     depth_images = resize2d(depth_images.unsqueeze(1), (self.cfg.depth.resized[1], self.cfg.depth.resized[0])).squeeze(1)
+        
+    #     # 7) 高斯模糊
+    #     if params['apply_gaussian_blur']:
+    #         k = params['gaussian_blur_kernel_size']
+    #         sigma = params['gaussian_blur_sigma']
+
+    #         # 缓存核，避免重复构建
+    #         if (not hasattr(self, "_gaussian_kernel")
+    #             or getattr(self, "_gaussian_kernel_size", None) != k
+    #             or getattr(self, "_gaussian_sigma", None) != sigma):
+    #             x = torch.arange(k, dtype=torch.float32, device=self.device) - k // 2
+    #             gauss_1d = torch.exp(-x ** 2 / (2 * sigma ** 2))
+    #             gauss_1d = gauss_1d / gauss_1d.sum()
+    #             gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
+    #             self._gaussian_kernel = gauss_2d.view(1, 1, k, k)  # [1,1,k,k]
+    #             self._gaussian_kernel_size = k
+    #             self._gaussian_sigma = sigma
+
+    #         # 复制边缘像素进行手动填充，避免零填充引入伪边界
+    #         depth_4d = depth_images.unsqueeze(1)  # [N,1,H,W]
+    #         pad = k // 2
+    #         depth_4d_padded = torch.nn.functional.pad(
+    #             depth_4d,
+    #             pad=(pad, pad, pad, pad),   # (左,右,上,下)
+    #             mode='replicate'
+    #         )
+    #         # 卷积时不再使用padding（已手动pad）
+    #         depth_images = torch.nn.functional.conv2d(
+    #             depth_4d_padded,
+    #             self._gaussian_kernel,
+    #             padding=0,
+    #             groups=1
+    #         ).squeeze(1)  # [N,H,W]
+    #         # print("apply_gaussian_blur")
 
         
         
     
-        return depth_images
+    #     return depth_images
 
 
     def crop_depth_image(self, depth_image):
@@ -938,125 +1256,349 @@ class LeggedRobot(BaseTask):
         # return depth_image[..., 5:-5, 60:-5]
         return depth_image[..., 2:-2, 15:-2]
     
+    def update_depth_buffer(self):
+        if not self.cfg.depth.use_camera:
+            return
+        
+        import time
+        
+        # 🔥 性能统计初始化
+        if not hasattr(self, '_depth_buffer_timing_counter'):
+            self._depth_buffer_timing_counter = 0
+            self._depth_buffer_timing_accumulator = {}
+        
+        total_start = time.time()
+        timings = {}
+        
+        # 0️⃣ 判断是否需要更新
+        t0 = time.time()
+        # 1) 刚重置的环境（episode_length <= 1）强制更新
+        just_reset = self.episode_length_buf <= 1
+        # 2) 正常运行的环境按延迟规则更新
+        effective_counter = self.depth_counter - self.depth_delay_count
+        normal_update = (effective_counter % self.cfg.depth.update_interval) == 0
+        # 任一条件满足即更新
+        should_update = just_reset | normal_update
+        # 只有需要更新的环境才进行后续处理
+        update_env_ids = should_update.nonzero(as_tuple=False).flatten()
+        timings['0_compute_update_mask'] = (time.time() - t0) * 1000
+        
+        if len(update_env_ids) == 0:
+            return
+        
+        # 1️⃣ 渲染和准备
+        t0 = time.time()
+        self.gym.step_graphics(self.sim)
+        timings['1a_step_graphics'] = (time.time() - t0) * 1000
+        
+        t0 = time.time()
+        self.gym.render_all_camera_sensors(self.sim)
+        timings['1b_render_cameras'] = (time.time() - t0) * 1000
+        
+        t0 = time.time()
+        self.gym.start_access_image_tensors(self.sim)
+        timings['1c_start_access'] = (time.time() - t0) * 1000
+
+        # 2️⃣ 批量获取需要更新的深度图
+        t0 = time.time()
+        raw_depth_images = []
+        for idx, env_id in enumerate(update_env_ids):
+            depth_image_ = self.gym.get_camera_image_gpu_tensor(
+                self.sim, 
+                self.envs[env_id], 
+                self.cam_handles[env_id],
+                gymapi.IMAGE_DEPTH
+            )
+            raw_depth_images.append(gymtorch.wrap_tensor(depth_image_))
+        timings['2_get_images'] = (time.time() - t0) * 1000
+
+        if len(raw_depth_images) > 0:
+            # 3️⃣ 堆叠成批次张量
+            t0 = time.time()
+            batch_depth_images = torch.stack(raw_depth_images, dim=0)
+            timings['3_stack_images'] = (time.time() - t0) * 1000
+            
+            # 4️⃣ 对整个批次进行并行处理
+            t0 = time.time()
+            processed_images = self.process_depth_image(batch_depth_images, env_ids=update_env_ids)
+            timings['4_process_images'] = (time.time() - t0) * 1000
+            
+            # 5️⃣ 计算初始化标志
+            t0 = time.time()
+            init_flags = self.episode_length_buf[update_env_ids] <= 1
+            init_flags = init_flags.squeeze() if len(init_flags.shape) > 1 else init_flags
+            timings['5_compute_init_flags'] = (time.time() - t0) * 1000
+
+            # 6️⃣ 初始化环境的buffer
+            t0 = time.time()
+            init_local_mask = init_flags.nonzero(as_tuple=False).flatten()
+            num_init = len(init_local_mask)
+            if num_init > 0:
+                init_env_indices = update_env_ids[init_local_mask]
+                init_depth = processed_images[init_local_mask].unsqueeze(1)
+                init_depth = init_depth.repeat(1, self.cfg.depth.buffer_len, 1, 1)
+                self.depth_buffer[init_env_indices] = init_depth
+            timings['6_init_buffer'] = (time.time() - t0) * 1000
+
+            # 7️⃣ 更新环境的buffer
+            t0 = time.time()
+            update_local_mask = (~init_flags).nonzero(as_tuple=False).flatten()
+            num_update = len(update_local_mask)
+            if num_update > 0:
+                update_env_indices = update_env_ids[update_local_mask]
+                prev_depth = self.depth_buffer[update_env_indices, 1:]
+                new_depth = processed_images[update_local_mask].unsqueeze(1)
+                self.depth_buffer[update_env_indices] = torch.cat([prev_depth, new_depth], dim=1)
+            timings['7_update_buffer'] = (time.time() - t0) * 1000
+        
+        # 8️⃣ 结束访问
+        t0 = time.time()
+        self.gym.end_access_image_tensors(self.sim)
+        timings['8_end_access'] = (time.time() - t0) * 1000
+
+        timings['TOTAL'] = (time.time() - total_start) * 1000
+        
+        # 🔥 记录稀疏更新的统计信息
+        timings['num_envs_updated'] = len(update_env_ids)
+        timings['num_envs_initialized'] = num_init if len(raw_depth_images) > 0 else 0
+        timings['num_envs_normal_update'] = num_update if len(raw_depth_images) > 0 else 0
+
+        # 🔥 累积统计
+        for key, value in timings.items():
+            if key not in self._depth_buffer_timing_accumulator:
+                self._depth_buffer_timing_accumulator[key] = 0.0
+            self._depth_buffer_timing_accumulator[key] += value
+        
+        self._depth_buffer_timing_counter += 1
+
+        # 每 10 次打印一次统计
+        if self._depth_buffer_timing_counter % 10 == 0:
+            self._print_depth_buffer_timing_statistics()
+
     # def update_depth_buffer(self):
     #     if not self.cfg.depth.use_camera:
     #         return
 
-    #     # 1) 刚重置的环境（episode_length <= 1）强制更新
-    #     just_reset = self.episode_length_buf <= 1
-
-    #     # 2) 正常运行的环境按延迟规则更新
-    #     effective_counter = self.depth_counter - self.depth_delay_count
-    #     normal_update = (effective_counter % self.cfg.depth.update_interval) == 0
-        
-    #     # 任一条件满足即更新
-    #     should_update = just_reset | normal_update
-    
-        
-    #     # 只有需要更新的环境才进行后续处理
-    #     update_env_ids = should_update.nonzero(as_tuple=False).flatten()
-        
-    #     if len(update_env_ids) == 0:
+    #     if self.global_counter % self.cfg.depth.update_interval != 0:
     #         return
         
+    #     import time
+        
+    #     # 🔥 性能统计初始化
+    #     if not hasattr(self, '_depth_buffer_timing_counter'):
+    #         self._depth_buffer_timing_counter = 0
+    #         self._depth_buffer_timing_accumulator = {}
+        
+    #     total_start = time.time()
+    #     timings = {}
+        
+    #     # 1️⃣ 渲染和获取深度图
+    #     t0 = time.time()
     #     self.gym.step_graphics(self.sim)
+    #     timings['1a_step_graphics'] = (time.time() - t0) * 1000
+        
+    #     t0 = time.time()
     #     self.gym.render_all_camera_sensors(self.sim)
+    #     timings['1b_render_cameras'] = (time.time() - t0) * 1000
+        
+    #     t0 = time.time()
     #     self.gym.start_access_image_tensors(self.sim)
+    #     timings['1c_start_access'] = (time.time() - t0) * 1000
 
-    #     # 🔥 使用枚举保持索引对应关系
+    #     # 2️⃣ 批量获取所有深度图
+    #     t0 = time.time()
     #     raw_depth_images = []
-    #     for idx, env_id in enumerate(update_env_ids):
+    #     for i in range(self.num_envs):
     #         depth_image_ = self.gym.get_camera_image_gpu_tensor(
     #             self.sim, 
-    #             self.envs[env_id], 
-    #             self.cam_handles[env_id],
+    #             self.envs[i], 
+    #             self.cam_handles[i],
     #             gymapi.IMAGE_DEPTH
     #         )
     #         raw_depth_images.append(gymtorch.wrap_tensor(depth_image_))
+    #     timings['2_get_images'] = (time.time() - t0) * 1000
 
-    #     if len(raw_depth_images) > 0:
-    #         # 将列表堆叠成批次张量 [N, H, W]
-    #         batch_depth_images = torch.stack(raw_depth_images, dim=0)
-    #         # 对整个批次进行并行处理
-    #         processed_images = self.process_depth_image(batch_depth_images, env_ids=update_env_ids)  # [N, H, W]
-            
-    #         # 🔥 关键修复：使用相对索引而非绝对env_id
-    #         # 检查哪些是刚重置的环境（需要初始化整个buffer）
-    #         init_flags = self.episode_length_buf[update_env_ids] <= 1
-    #         init_flags = init_flags.squeeze() if len(init_flags.shape) > 1 else init_flags
+    #     # 3️⃣ 堆叠成批次张量
+    #     t0 = time.time()
+    #     batch_depth_images = torch.stack(raw_depth_images, dim=0)
+    #     timings['3_stack_images'] = (time.time() - t0) * 1000
+        
+    #     # 4️⃣ 对整个批次进行并行处理（这里会调用 process_depth_image，它内部有自己的计时）
+    #     t0 = time.time()
+    #     processed_images = self.process_depth_image(batch_depth_images)
+    #     timings['4_process_images'] = (time.time() - t0) * 1000
+        
+    #     # 5️⃣ 判断哪些环境需要初始化
+    #     t0 = time.time()
+    #     init_flags = self.episode_length_buf <= 1
+    #     init_flags = init_flags.squeeze() if len(init_flags.shape) > 1 else init_flags
+    #     timings['5_compute_init_flags'] = (time.time() - t0) * 1000
 
-    #         # 对于需要初始化的环境（相对索引）
-    #         init_local_mask = init_flags.nonzero(as_tuple=False).flatten()  # 在batch中的索引
-    #         if len(init_local_mask) > 0:
-    #             init_env_indices = update_env_ids[init_local_mask]  # 实际env_id
-    #             init_depth = processed_images[init_local_mask].unsqueeze(1)  # 使用相对索引
-    #             init_depth = init_depth.repeat(1, self.cfg.depth.buffer_len, 1, 1)
-    #             self.depth_buffer[init_env_indices] = init_depth  # 写入实际env_id
+    #     # 6️⃣ 初始化环境的buffer
+    #     t0 = time.time()
+    #     init_env_ids = init_flags.nonzero(as_tuple=False).flatten()
+    #     init_env_ids = init_env_ids[init_env_ids < self.num_envs]
+    #     if len(init_env_ids) > 0:
+    #         init_depth = processed_images[init_env_ids].unsqueeze(1)
+    #         init_depth = init_depth.repeat(1, self.cfg.depth.buffer_len, 1, 1)
+    #         self.depth_buffer[init_env_ids] = init_depth
+    #     timings['6_init_buffer'] = (time.time() - t0) * 1000
 
-    #         # 对于需要更新的环境（相对索引）
-    #         update_local_mask = (~init_flags).nonzero(as_tuple=False).flatten()  # 在batch中的索引
-    #         if len(update_local_mask) > 0:
-    #             update_env_indices = update_env_ids[update_local_mask]  # 实际env_id
-    #             prev_depth = self.depth_buffer[update_env_indices, 1:]
-    #             new_depth = processed_images[update_local_mask].unsqueeze(1)  # 使用相对索引
-    #             self.depth_buffer[update_env_indices] = torch.cat([prev_depth, new_depth], dim=1)
+    #     # 7️⃣ 更新环境的buffer
+    #     t0 = time.time()
+    #     update_env_ids = (~init_flags).nonzero(as_tuple=False).flatten()
+    #     update_env_ids = update_env_ids[update_env_ids < self.num_envs]
+    #     if len(update_env_ids) > 0:
+    #         prev_depth = self.depth_buffer[update_env_ids, 1:]
+    #         new_depth = processed_images[update_env_ids].unsqueeze(1)
+    #         self.depth_buffer[update_env_ids] = torch.cat([prev_depth, new_depth], dim=1)
+    #     timings['7_update_buffer'] = (time.time() - t0) * 1000
+
+    #     # 8️⃣ 结束访问
+    #     t0 = time.time()
+    #     self.gym.end_access_image_tensors(self.sim)
+    #     timings['8_end_access'] = (time.time() - t0) * 1000
+
+    #     timings['TOTAL'] = (time.time() - total_start) * 1000
+
+    #     # 🔥 累积统计
+    #     for key, value in timings.items():
+    #         if key not in self._depth_buffer_timing_accumulator:
+    #             self._depth_buffer_timing_accumulator[key] = 0.0
+    #         self._depth_buffer_timing_accumulator[key] += value
+        
+    #     self._depth_buffer_timing_counter += 1
+
+    #     # 每 10 次打印一次统计
+    #     if self._depth_buffer_timing_counter % 10 == 0:
+    #         self._print_depth_buffer_timing_statistics()
+
+    def _print_depth_buffer_timing_statistics(self):
+        """打印深度图buffer更新性能统计"""
+        print("\n" + "="*100)
+        print(f"🔥 深度图Buffer更新性能分析 (平均值, 基于 {self._depth_buffer_timing_counter} 次调用)")
+        print("="*100)
+
+        total_time = self._depth_buffer_timing_accumulator.get('TOTAL', 0) / self._depth_buffer_timing_counter
+
+        # 主要步骤
+        main_steps = [
+            ('1a_step_graphics', '1 Step Graphics'),
+            ('1b_render_cameras', '2 Render Cameras'),
+            ('1c_start_access', '3  Start Access'),
+            ('2_get_images', '4  Get Images (循环获取所有env)'),
+            ('3_stack_images', '5  Stack Images'),
+            ('4_process_images', '6  Process Images (调用process_depth_image)'),
+            ('5_compute_init_flags', '7  Compute Init Flags'),
+            ('6_init_buffer', '8  Initialize Buffer (新重置的env)'),
+            ('7_update_buffer', '9  Update Buffer (正常运行的env)'),
+            ('8_end_access', '10 End Access'),
+        ]
+
+        print("\n📊 主要处理步骤:")
+        print("-"*100)
+        for key, desc in main_steps:
+            if key in self._depth_buffer_timing_accumulator:
+                avg_time = self._depth_buffer_timing_accumulator[key] / self._depth_buffer_timing_counter
+                percentage = (avg_time / total_time * 100) if total_time > 0 else 0
+                print(f"  {desc:.<60} {avg_time:>10.4f} ms  ({percentage:>5.1f}%)")
+
+        # 渲染总计
+        render_total = (
+            self._depth_buffer_timing_accumulator.get('1a_step_graphics', 0) +
+            self._depth_buffer_timing_accumulator.get('1b_render_cameras', 0) +
+            self._depth_buffer_timing_accumulator.get('1c_start_access', 0)
+        ) / self._depth_buffer_timing_counter
+        
+        # 获取总计
+        fetch_total = self._depth_buffer_timing_accumulator.get('2_get_images', 0) / self._depth_buffer_timing_counter
+        
+        # 处理总计
+        process_total = self._depth_buffer_timing_accumulator.get('4_process_images', 0) / self._depth_buffer_timing_counter
+        
+        # Buffer操作总计
+        buffer_total = (
+            self._depth_buffer_timing_accumulator.get('6_init_buffer', 0) +
+            self._depth_buffer_timing_accumulator.get('7_update_buffer', 0)
+        ) / self._depth_buffer_timing_counter
+
+        print("\n📊 阶段汇总:")
+        print("-"*100)
+        print(f"  {'🎬 渲染阶段(step+render+start)':<60} {render_total:>10.4f} ms  ({render_total/total_time*100:>5.1f}%)")
+        print(f"  {'📥 获取阶段(循环get images)':<60} {fetch_total:>10.4f} ms  ({fetch_total/total_time*100:>5.1f}%)")
+        print(f"  {'⚙️  处理阶段(process_depth_image)':<60} {process_total:>10.4f} ms  ({process_total/total_time*100:>5.1f}%)")
+        print(f"  {'💾 Buffer更新阶段(init+update)':<60} {buffer_total:>10.4f} ms  ({buffer_total/total_time*100:>5.1f}%)")
+
+        print("\n📊 总计:")
+        print("-"*100)
+        print(f"  {'⏱️  总处理时间':<60} {total_time:>10.4f} ms")
+        
+        # 额外统计信息
+        print("\n📊 额外信息:")
+        print("-"*100)
+        print(f"  {'环境数量':<60} {self.num_envs:>10d}")
+        print(f"  {'更新间隔(steps)':<60} {self.cfg.depth.update_interval:>10d}")
+        print(f"  {'平均每环境获取时间':<60} {fetch_total/self.num_envs:>10.4f} ms")
+        print("="*100 + "\n")
+
+        # 重置计数器
+        self._depth_buffer_timing_counter = 0
+        self._depth_buffer_timing_accumulator = {}
+
+    # def update_depth_buffer(self):
+    #     if not self.cfg.depth.use_camera:
+    #         return
+
+    #     if self.global_counter % self.cfg.depth.update_interval != 0:
+    #         return
+    #     self.gym.step_graphics(self.sim) # required to render in headless mode
+    #     self.gym.render_all_camera_sensors(self.sim)
+    #     self.gym.start_access_image_tensors(self.sim)
+
+    #     # 1. 批量获取所有深度图
+    #     raw_depth_images = []
+    #     for i in range(self.num_envs):
+    #         depth_image_ = self.gym.get_camera_image_gpu_tensor(self.sim, 
+    #                                                             self.envs[i], 
+    #                                                             self.cam_handles[i],
+    #                                                             gymapi.IMAGE_DEPTH)
+    #         raw_depth_images.append(gymtorch.wrap_tensor(depth_image_))
+    #         # print(f"Raw depth image {i} shape: {depth_image_.shape}")
+
+    #     # 将列表堆叠成一个批次张量
+    #     batch_depth_images = torch.stack(raw_depth_images, dim=0)
+    #     # print(f"batch_depth_images shape: {batch_depth_images.shape}")
+    #     # 2. 对整个批次进行并行处理
+    #     processed_images = self.process_depth_image(batch_depth_images)
+        
+    #     init_flags = self.episode_length_buf <= 1
+    #     # 确保init_flags是一维张量
+    #     init_flags = init_flags.squeeze() if len(init_flags.shape) > 1 else init_flags
+
+    #     # 对于需要初始化的环境：过滤合法索引，避免越界
+    #     init_env_ids = init_flags.nonzero(as_tuple=False).flatten()
+    #     # 过滤掉超出num_envs的非法索引
+    #     init_env_ids = init_env_ids[init_env_ids < self.num_envs]
+    #     if len(init_env_ids) > 0:
+    #         # 正确堆叠：先扩展维度再重复，避免列表乘法的浅拷贝问题
+    #         init_depth = processed_images[init_env_ids].unsqueeze(1)  # [N, 1, H, W]
+    #         init_depth = init_depth.repeat(1, self.cfg.depth.buffer_len, 1, 1)  # [N, buffer_len, H, W]
+    #         self.depth_buffer[init_env_ids] = init_depth
+
+    #     # 对于需要更新的环境：同样过滤合法索引
+    #     update_env_ids = (~init_flags).nonzero(as_tuple=False).flatten()
+    #     # 过滤掉超出num_envs的非法索引
+    #     update_env_ids = update_env_ids[update_env_ids < self.num_envs]
+    #     if len(update_env_ids) > 0:
+    #         # 提取需要保留的历史数据 [M, buffer_len-1, H, W]
+    #         prev_depth = self.depth_buffer[update_env_ids, 1:]
+    #         # 新增的深度图：扩展维度到 [M, 1, H, W]
+    #         new_depth = processed_images[update_env_ids].unsqueeze(1)
+
+    #         self.depth_buffer[update_env_ids] = torch.cat([prev_depth, new_depth], dim=1)
+
 
     #     self.gym.end_access_image_tensors(self.sim)
-
-    def update_depth_buffer(self):
-        if not self.cfg.depth.use_camera:
-            return
-
-        if self.global_counter % self.cfg.depth.update_interval != 0:
-            return
-        self.gym.step_graphics(self.sim) # required to render in headless mode
-        self.gym.render_all_camera_sensors(self.sim)
-        self.gym.start_access_image_tensors(self.sim)
-
-        # 1. 批量获取所有深度图
-        raw_depth_images = []
-        for i in range(self.num_envs):
-            depth_image_ = self.gym.get_camera_image_gpu_tensor(self.sim, 
-                                                                self.envs[i], 
-                                                                self.cam_handles[i],
-                                                                gymapi.IMAGE_DEPTH)
-            raw_depth_images.append(gymtorch.wrap_tensor(depth_image_))
-            # print(f"Raw depth image {i} shape: {depth_image_.shape}")
-
-        # 将列表堆叠成一个批次张量
-        batch_depth_images = torch.stack(raw_depth_images, dim=0)
-        # print(f"batch_depth_images shape: {batch_depth_images.shape}")
-        # 2. 对整个批次进行并行处理
-        processed_images = self.process_depth_image(batch_depth_images)
-        
-        init_flags = self.episode_length_buf <= 1
-        # 确保init_flags是一维张量
-        init_flags = init_flags.squeeze() if len(init_flags.shape) > 1 else init_flags
-
-        # 对于需要初始化的环境：过滤合法索引，避免越界
-        init_env_ids = init_flags.nonzero(as_tuple=False).flatten()
-        # 过滤掉超出num_envs的非法索引
-        init_env_ids = init_env_ids[init_env_ids < self.num_envs]
-        if len(init_env_ids) > 0:
-            # 正确堆叠：先扩展维度再重复，避免列表乘法的浅拷贝问题
-            init_depth = processed_images[init_env_ids].unsqueeze(1)  # [N, 1, H, W]
-            init_depth = init_depth.repeat(1, self.cfg.depth.buffer_len, 1, 1)  # [N, buffer_len, H, W]
-            self.depth_buffer[init_env_ids] = init_depth
-
-        # 对于需要更新的环境：同样过滤合法索引
-        update_env_ids = (~init_flags).nonzero(as_tuple=False).flatten()
-        # 过滤掉超出num_envs的非法索引
-        update_env_ids = update_env_ids[update_env_ids < self.num_envs]
-        if len(update_env_ids) > 0:
-            # 提取需要保留的历史数据 [M, buffer_len-1, H, W]
-            prev_depth = self.depth_buffer[update_env_ids, 1:]
-            # 新增的深度图：扩展维度到 [M, 1, H, W]
-            new_depth = processed_images[update_env_ids].unsqueeze(1)
-
-            self.depth_buffer[update_env_ids] = torch.cat([prev_depth, new_depth], dim=1)
-
-
-        self.gym.end_access_image_tensors(self.sim)
 
     def _update_goals(self):
         next_flag = self.reach_goal_timer > self.cfg.env.reach_goal_delay / self.dt
