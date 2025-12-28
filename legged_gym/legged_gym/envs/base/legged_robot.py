@@ -1185,9 +1185,9 @@ class LeggedRobot(BaseTask):
         obs_buf = torch.cat((#skill_vector, 
                             self.base_ang_vel  * self.obs_scales.ang_vel,   #[1,3]
                             imu_obs,    #[1,2]
-                            0*self.delta_yaw[:, None], 
-                            self.delta_yaw[:, None],
-                            self.delta_next_yaw[:, None],
+                            self.yaw[:, None], 
+                            self.commands[:, 2:3],
+                            0*self.delta_next_yaw[:, None],
                             0*self.commands[:, 0:2], 
                             self.commands[:, 0:1],  #[1,1]
                             (self.env_class != 9).float()[:, None], 
@@ -2261,7 +2261,17 @@ class LeggedRobot(BaseTask):
         cur_vel = self.root_states[:, 7:9]
         rew = torch.minimum(torch.sum(target_vec_norm * cur_vel, dim=-1), self.commands[:, 0]) / (self.commands[:, 0] + 1e-5)
         return rew
+    
+    def _reward_tracking_lin_vel(self):
+        # Tracking of linear velocity commands (xy axes)
+        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
+        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
 
+    def _reward_tracking_ang_vel(self):
+        # Tracking of angular velocity commands (yaw) 
+        ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
+        return torch.exp(-ang_vel_error/self.cfg.rewards.tracking_sigma)
+    
     def _reward_tracking_yaw(self):
         rew = torch.exp(-torch.abs(self.target_yaw - self.yaw))
         return rew

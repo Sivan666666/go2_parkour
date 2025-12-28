@@ -229,7 +229,7 @@ def play(args):
         
         # # 如果你想保持特定的前进方向，可以设置：
         env.commands[:, 0] = 0.5  # forward velocity
-        # env.commands[:, 2] = 0.5  # lateral velocity
+        env.commands[:, 2] = 0.  # lateral velocity
 
         with torch.no_grad():
             if args.use_jit:
@@ -253,7 +253,7 @@ def play(args):
                         depth_yaw = depth_latent_and_yaw[:, -2:] * 1.5
                     # 不使用 yaw 修正，保持原始观测
                     # obs[:, 6:8] = 1.5*depth_yaw  # 注释掉这行
-                    obs[:, 6:8] = -env.yaw.unsqueeze(1)   # [num_envs, 2] 两列都填 -yaw  # 强制设为0
+                    # obs[:, 6:8] = -env.yaw.unsqueeze(1)   # [num_envs, 2] 两列都填 -yaw  # 强制设为0
 
                     # look_id = env.lookat_id
                     # print("env.yaw[look_id]:", env.yaw[look_id].item())
@@ -289,7 +289,8 @@ def play(args):
         q = env.base_quat[look_id]
         x, y, z, w = q[0].item(), q[1].item(), q[2].item(), q[3].item()
         denom = 1.0 - 2.0*(y*y + z*z)
-        yaw = np.arctan2(2.0*(w*z + x*y), denom)
+        # yaw = np.arctan2(2.0*(w*z + x*y), denom)
+        yaw = obs[look_id, 5].item()
         yaw_hist.append(float(yaw))
         # yaw_hist.append(depth_yaw[look_id, 0].item())
 
@@ -298,7 +299,8 @@ def play(args):
         delta_yaw = -env.yaw[look_id].item()  # 与 obs[:,6] 一致
         # delta_yaw = obs[look_id, 6].item() 
         # print("delta_yaw (=-yaw):", delta_yaw)
-        yaw_desired = yaw + delta_yaw
+        # yaw_desired = yaw + delta_yaw
+        yaw_desired = obs[look_id, 6].item()
         yaw_cmd_hist.append(yaw_desired)
 
         # 位置

@@ -78,7 +78,7 @@ def play(args):
                         "normal stairs down": 0.0,
                         "normal stairs up": 0.,
                         "steep hollow stairs down": 0.0,
-                        "steep hollow stairs up": 0.,
+                        "steep hollow stairs up": 1.,
                         "discrete": 0., 
                         "stepping stones": 0.0,
                         "gaps": 0., 
@@ -87,7 +87,7 @@ def play(args):
                         "wall": 0.0,
                         "platform": 0.,
                         "hollow stairs down": 0.0, 
-                        "hollow stairs up": 1.,
+                        "hollow stairs up": 0.,
                         "parkour": 0.0,         # 0.2
                         "parkour_hurdle": 0.0,  # 0.2
                         "parkour_flat": 0.0,
@@ -104,7 +104,13 @@ def play(args):
     # env_cfg.depth.angle = [59-1, 59+1]  # positive pitch down  #27-5,27+5
 
     # env_cfg.depth.position = [0.3, 0, 0.147]  # front camera 
-    env_cfg.depth.angle = [30-0.1, 30+0.1]  # positive pitch down  #27-5,27+5
+    # env_cfg.depth.angle = [30-0.1, 30+0.1]  # positive pitch down  #27-5,27+5
+
+    if args.use_camera:
+        env_cfg.depth.angle = [30-0.1, 30+0.1]
+        env_cfg.depth.z_angle = [-0.1, 0.1]
+        env_cfg.depth.x_angle = [-5.1, 5.0]
+        env_cfg.env.randomize_start_pos = False
 
     # for go2
         # position = [0.3, 0, 0.08] # front camera 002-g2-camera 

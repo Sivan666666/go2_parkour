@@ -250,10 +250,10 @@ class LeggedRobotCfg(BaseConfig):
 
         # Easy ranges
         class max_ranges:
-            lin_vel_x = [0.3, 0.8] # min max [m/s]
+            lin_vel_x = [0.3, 1.0] # min max [m/s]
             lin_vel_y = [-0.3, 0.3]#[0.15, 0.6]   # min max [m/s]
             ang_vel_yaw = [-0, 0]    # min max [rad/s]
-            heading = [-1.6, 1.6]
+            heading = [-0, 0] 
 
         class crclm_incremnt:
             lin_vel_x = 0.1 # min max [m/s]
@@ -328,7 +328,8 @@ class LeggedRobotCfg(BaseConfig):
         class scales:
             # tracking rewards
             tracking_goal_vel = 2.5
-            tracking_yaw = 0.5
+            # tracking_yaw = 0.5
+            tracking_ang_vel = 0.5
             # regularization rewards
             lin_vel_z = -1.0
             ang_vel_xy = -0.05
