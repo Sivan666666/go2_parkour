@@ -1077,6 +1077,21 @@ class LeggedRobot(BaseTask):
         self.reset_buf |= pitch_cutoff
         # self.reset_buf |= height_cutoff
 
+    def update_command_curriculum(self, env_ids):
+        """ Implements a curriculum of increasing commands
+
+        Args:
+            env_ids (List[int]): ids of environments being reset
+        """
+        low_vel_env_ids = (env_ids > (self.num_envs * 0.2))
+        high_vel_env_ids = (env_ids < (self.num_envs * 0.2))
+        low_vel_env_ids = env_ids[low_vel_env_ids.nonzero(as_tuple=True)]
+        high_vel_env_ids = env_ids[high_vel_env_ids.nonzero(as_tuple=True)]
+        # If the tracking reward is above 80% of the maximum, increase the range of commands
+        if (torch.mean(self.episode_sums["tracking_lin_vel"][low_vel_env_ids]) / self.max_episode_length > 0.8 * self.reward_scales["tracking_lin_vel"]) and (torch.mean(self.episode_sums["tracking_lin_vel"][high_vel_env_ids]) / self.max_episode_length > 0.8 * self.reward_scales["tracking_lin_vel"]):
+            # self.command_ranges["lin_vel_x"][0] = np.clip(self.command_ranges["lin_vel_x"][0] - 0.2, -self.cfg.commands.max_curriculum, 0.)
+            self.command_ranges["lin_vel_x"][1] = np.clip(self.command_ranges["lin_vel_x"][1] + 0.2, 0., self.cfg.commands.max_curriculum)
+
     def reset_idx(self, env_ids):
         """ Reset some environments.
             Calls self._reset_dofs(env_ids), self._reset_root_states(env_ids), and self._resample_commands(env_ids)
@@ -1156,7 +1171,68 @@ class LeggedRobot(BaseTask):
             rew = self._reward_termination() * self.reward_scales["termination"]
             self.rew_buf += rew
             self.episode_sums["termination"] += rew
-    
+
+    def _get_noise_scale_vec(self, cfg):
+        """ Sets a vector used to scale the noise added to the observations.
+            [NOTE]: Must be adapted when changing the observations structure
+
+        Args:
+            cfg (Dict): Environment config file
+
+        Returns:
+            [torch.Tensor]: Vector of scales used to multiply a uniform distribution in [-1, 1]
+        """
+        self.add_noise = self.cfg.noise.add_noise
+        noise_scales = self.cfg.noise.noise_scales
+        noise_level = self.cfg.noise.noise_level
+        
+        # 按照 obs_buf 的构建顺序逐段设置噪声尺度
+        noise_vec_list = []
+        
+        # 1. base_ang_vel (3)
+        noise_vec_list.append(torch.ones(3, device=self.device) * noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel)
+        
+        # 2. imu_obs (roll, pitch) + yaw (3) - 使用 gravity 噪声
+        noise_vec_list.append(torch.ones(3, device=self.device) * noise_scales.gravity * noise_level)
+        
+        # 3. cmd_yaw (1) - no noise
+        noise_vec_list.append(torch.zeros(1, device=self.device))
+        
+        # 4. delta_next_yaw (1) - no noise
+        noise_vec_list.append(torch.zeros(1, device=self.device))
+        
+        # 5. zero_cmd_xy (2) - no noise
+        noise_vec_list.append(torch.zeros(2, device=self.device))
+        
+        # 6. cmd_vx (1) - no noise
+        noise_vec_list.append(torch.zeros(1, device=self.device))
+        
+        # 7. env_class flags (2) - no noise
+        noise_vec_list.append(torch.zeros(2, device=self.device))
+        
+        # 8. dof_pos (num_actions)
+        noise_vec_list.append(torch.ones(self.num_actions, device=self.device) * noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos)
+        
+        # 9. dof_vel (num_actions)
+        noise_vec_list.append(torch.ones(self.num_actions, device=self.device) * noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel)
+        
+        # 10. last_actions (num_actions) - no noise
+        noise_vec_list.append(torch.zeros(self.num_actions, device=self.device))
+        
+        # 11. foot_contacts (4) - no noise
+        noise_vec_list.append(torch.zeros(4, device=self.device))
+        
+        # 拼接成一个完整的向量
+        noise_vec = torch.cat(noise_vec_list, dim=0)
+        
+        # 如果有高度测量,追加高度噪声
+        if self.cfg.terrain.measure_heights:
+            height_noise = torch.ones(self.measured_heights.shape[1] if hasattr(self, 'measured_heights') else 187, 
+                                    device=self.device) * noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
+            noise_vec = torch.cat([noise_vec, height_noise], dim=0)
+        
+        return noise_vec
+
     def compute_observations(self):
         """ 
         Computes observations
@@ -1182,21 +1258,28 @@ class LeggedRobot(BaseTask):
             ("feet_contact(centered,reindexed)", self.reindex_feet(self.contact_filt.float()-0.5), "足端接触状态")
         ]
 
-        obs_buf = torch.cat((#skill_vector, 
-                            self.base_ang_vel  * self.obs_scales.ang_vel,   #[1,3]
-                            imu_obs,    #[1,2]
-                            self.yaw[:, None], 
-                            self.commands[:, 2:3],
-                            0*self.delta_next_yaw[:, None],
-                            0*self.commands[:, 0:2], 
-                            self.commands[:, 0:1],  #[1,1]
-                            (self.env_class != 9).float()[:, None], 
-                            (self.env_class == 9).float()[:, None],
-                            self.reindex((self.dof_pos - self.default_dof_pos_all) * self.obs_scales.dof_pos),
-                            self.reindex(self.dof_vel * self.obs_scales.dof_vel),
-                            self.reindex(self.action_history_buf[:, -1]),
-                            self.reindex_feet(self.contact_filt.float()-0.5),
-                            ),dim=-1)
+        obs_buf = torch.cat((
+                                self.base_ang_vel * self.obs_scales.ang_vel,   # 3
+                                imu_obs,                                        # 2
+                                self.yaw[:, None],                              # 1
+                                self.commands[:, 2:3],                          # 1
+                                0*self.delta_next_yaw[:, None],                 # 1
+                                0*self.commands[:, 0:2],                        # 2
+                                self.commands[:, 0:1],                          # 1
+                                (self.env_class != 9).float()[:, None],         # 1
+                                (self.env_class == 9).float()[:, None],         # 1
+                                self.reindex((self.dof_pos - self.default_dof_pos_all) * self.obs_scales.dof_pos),  # num_actions
+                                self.reindex(self.dof_vel * self.obs_scales.dof_vel),                                # num_actions
+                                self.reindex(self.action_history_buf[:, -1]),                                         # num_actions
+                                self.reindex_feet(self.contact_filt.float()-0.5),                                     # 4
+                            ), dim=-1)
+
+        if self.add_noise:
+            # 确保 noise_scale_vec 的长度与 obs_buf 匹配
+            noise_vec_len = obs_buf.shape[1]
+            noise = (2 * torch.rand_like(obs_buf) - 1) * self.noise_scale_vec[:noise_vec_len]
+            obs_buf = obs_buf + noise
+
         priv_explicit = torch.cat((self.base_lin_vel * self.obs_scales.lin_vel,
                                    0 * self.base_lin_vel,
                                    0 * self.base_lin_vel), dim=-1)
@@ -1208,6 +1291,12 @@ class LeggedRobot(BaseTask):
         ), dim=-1)
         if self.cfg.terrain.measure_heights:
             heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.3 - self.measured_heights, -1, 1.)
+            #  给高度测量添加噪声(使用预计算的噪声向量尾部)
+            if self.add_noise:
+                height_start_idx = obs_buf.shape[1]
+                height_noise = (2 * torch.rand_like(heights) - 1) * \
+                    self.noise_scale_vec[height_start_idx:height_start_idx + heights.shape[1]]
+                heights = heights + height_noise
             self.obs_buf = torch.cat([obs_buf, heights, priv_explicit, priv_latent, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
         else:
             self.obs_buf = torch.cat([obs_buf, priv_explicit, priv_latent, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
@@ -1412,12 +1501,20 @@ class LeggedRobot(BaseTask):
         Args:
             env_ids (List[int]): Environments ids for which new commands are needed
         """
-        self.commands[env_ids, 0] = torch_rand_float(self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+        self.commands[env_ids, 0] = torch_rand_float(0, 1.0, (len(env_ids), 1), device=self.device).squeeze(1)
         if self.cfg.commands.heading_command:
             self.commands[env_ids, 3] = torch_rand_float(self.command_ranges["heading"][0], self.command_ranges["heading"][1], (len(env_ids), 1), device=self.device).squeeze(1)
         else:
             self.commands[env_ids, 2] = torch_rand_float(self.command_ranges["ang_vel_yaw"][0], self.command_ranges["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device).squeeze(1)
             self.commands[env_ids, 2] *= torch.abs(self.commands[env_ids, 2]) > self.cfg.commands.ang_vel_clip
+
+        high_vel_env_ids = (env_ids < (self.num_envs * 0.2))
+        high_vel_env_ids = env_ids[high_vel_env_ids.nonzero(as_tuple=True)]
+
+        self.commands[high_vel_env_ids, 0] = torch_rand_float(self.command_ranges["lin_vel_x"][0], self.command_ranges["lin_vel_x"][1], (len(high_vel_env_ids), 1), device=self.device).squeeze(1)
+
+        # set y commands of high vel envs to zero
+        self.commands[high_vel_env_ids, 1:2] *= (torch.norm(self.commands[high_vel_env_ids, 0:1], dim=1) < 1.0).unsqueeze(1)
 
         # set small commands to zero
         self.commands[env_ids, :2] *= torch.abs(self.commands[env_ids, 0:1]) > self.cfg.commands.lin_vel_clip
@@ -1572,6 +1669,7 @@ class LeggedRobot(BaseTask):
         # initialize some data used later on
         self.common_step_counter = 0
         self.extras = {}
+        self.noise_scale_vec = self._get_noise_scale_vec(self.cfg)
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
         self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
@@ -2385,6 +2483,12 @@ class LeggedRobot(BaseTask):
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
         return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
 
+    def _reward_foot_contact(self):
+        # penalize foot slip
+        forces = self.contact_forces[:, self.feet_indices, 2]
+        forces_reward = torch.square(forces[:,0]+forces[:,2]-forces[:,1]-forces[:,3])
+        return forces_reward
+    
     # def _reward_no_move_when_command(self):
     #     # 取命令范围阈值
     #     lin_vel_clip = self.cfg.commands.lin_vel_clip if hasattr(self.cfg.commands, 'lin_vel_clip') else 0.1

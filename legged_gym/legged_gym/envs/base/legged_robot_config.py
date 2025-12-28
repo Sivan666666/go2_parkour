@@ -138,17 +138,27 @@ class LeggedRobotCfg(BaseConfig):
         clip_observations = 100.
         clip_actions = 1.2
     class noise:
-        add_noise = False
+        add_noise = True
         noise_level = 1.0 # scales other values
         quantize_height = True
         class noise_scales:
-            rotation = 0.0
-            dof_pos = 0.01
-            dof_vel = 0.05
+            # 原有的噪声尺度
             lin_vel = 0.05
             ang_vel = 0.05
-            gravity = 0.02
+            gravity = 0.02  # 用于 IMU (roll, pitch, yaw)
+            dof_pos = 0.01
+            dof_vel = 0.05
             height_measurements = 0.02
+            
+            # 补齐的噪声尺度
+            rotation = 0.0  # 未使用
+            commands = 0.0  # 命令不加噪声 (cmd_yaw, delta_yaw, cmd_xy, cmd_vx)
+            env_class = 0.0  # 环境类别标志不加噪声
+            actions = 0.0  # 上一时刻动作不加噪声
+            foot_contacts = 0.0  # 足端接触不加噪声
+            priv_explicit = 0.0  # 私有显式观测不加噪声
+            priv_latent = 0.0  # 私有潜在观测不加噪声
+            history = 0.0  # 历史观测不加噪声
 
     class terrain:
         mesh_type = 'trimesh' # "heightfield" # none, plane, heightfield or trimesh
@@ -233,8 +243,8 @@ class LeggedRobotCfg(BaseConfig):
         num_goals = 5
 
     class commands:
-        curriculum = False
-        max_curriculum = 1.
+        curriculum = True
+        max_curriculum = 2.
         num_commands = 4 # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
         resampling_time = 6. # time before command are changed[s]
         heading_command = True # if true: compute ang vel command from heading error
@@ -243,14 +253,14 @@ class LeggedRobotCfg(BaseConfig):
         ang_vel_clip = 0.4
         # Easy ranges
         class ranges:
-            lin_vel_x = [0., 1.5] # min max [m/s]
+            lin_vel_x = [0., 1.0] # min max [m/s]
             lin_vel_y = [0.0, 0.0]   # min max [m/s]
             ang_vel_yaw = [0, 0]    # min max [rad/s]
             heading = [0, 0]
 
         # Easy ranges
         class max_ranges:
-            lin_vel_x = [0.3, 1.0] # min max [m/s]
+            lin_vel_x = [0.0, 1.0] # min max [m/s]
             lin_vel_y = [-0.3, 0.3]#[0.15, 0.6]   # min max [m/s]
             ang_vel_yaw = [-0, 0]    # min max [rad/s]
             heading = [-0, 0] 
@@ -348,7 +358,7 @@ class LeggedRobotCfg(BaseConfig):
             # base_height = -0.2
             
         only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
-        tracking_sigma = 0.2 # tracking reward = exp(-error^2/sigma)
+        tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
         soft_dof_pos_limit = 1. # percentage of urdf limits, values above this limit are penalized
         soft_dof_vel_limit = 1
         soft_torque_limit = 0.4
