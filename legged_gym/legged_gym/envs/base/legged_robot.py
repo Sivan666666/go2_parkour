@@ -1621,7 +1621,8 @@ class LeggedRobot(BaseTask):
         # 如果本回合已经经过所有目标点，也提升难度
         # 注意：cur_goal_idx 是全量张量，取对应 env_ids 的进度判断
         reach_goal_cutoff = self.cur_goal_idx[env_ids] >= self.cfg.terrain.num_goals
-        move_up = move_up | reach_goal_cutoff
+        # move_up = move_up | reach_goal_cutoff
+        move_up = reach_goal_cutoff
 
         self.terrain_levels[env_ids] += 1 * move_up - 1 * move_down
         # # Robots that solve the last level are sent to a random one
