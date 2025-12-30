@@ -206,6 +206,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
             feet_air_time = 0.01
             roll = -1.5
+            pitch = -0.05
             # foot_contact = 2e-5
             
             # 根据HIMLOCO新加的奖励函数

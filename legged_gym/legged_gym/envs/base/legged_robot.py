@@ -1574,7 +1574,7 @@ class LeggedRobot(BaseTask):
             self.root_states[env_ids] = self.base_init_state
             self.root_states[env_ids, :3] += self.env_origins[env_ids]
             if self.cfg.env.randomize_start_pos:
-                self.root_states[env_ids, :2] += torch_rand_float(-0.3, 0.3, (len(env_ids), 2), device=self.device) # xy position within 1m of the center
+                self.root_states[env_ids, :1] += torch_rand_float(-0.3, 0.3, (len(env_ids), 1), device=self.device) # xy position within 1m of the center
             if self.cfg.env.randomize_start_yaw:
                 rand_yaw = self.cfg.env.rand_yaw_range*torch_rand_float(-1, 1, (len(env_ids), 1), device=self.device).squeeze(1)
                 if self.cfg.env.randomize_start_pitch:
@@ -2358,8 +2358,10 @@ class LeggedRobot(BaseTask):
         norm = torch.norm(self.target_pos_rel, dim=-1, keepdim=True)
         target_vec_norm = self.target_pos_rel / (norm + 1e-5)
         cur_vel = self.root_states[:, 7:9]
-        rew = torch.minimum(torch.sum(target_vec_norm * cur_vel, dim=-1), self.commands[:, 0]) / (self.commands[:, 0] + 1e-5)
-        return rew
+        # rew = torch.minimum(torch.sum(target_vec_norm * cur_vel, dim=-1), self.commands[:, 0]) / (self.commands[:, 0] + 1e-5)
+        vel_goal = target_vec_norm * cur_vel
+        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - vel_goal), dim=1)
+        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
     
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
@@ -2394,6 +2396,10 @@ class LeggedRobot(BaseTask):
     def _reward_roll(self):
         # 专门的 roll 惩罚项（便于单独调权重）
         return torch.square(self.roll)  # 或 torch.square(self.roll)
+    
+    def _reward_pitch(self):
+        # 专门的 pitch 惩罚项（便于单独调权重）
+        return torch.square(self.pitch)  # 或 torch.square(self.pitch)
 
     def _reward_dof_acc(self):
         return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
