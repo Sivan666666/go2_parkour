@@ -64,7 +64,7 @@ class PPO:
                  estimator_paras,
                  depth_encoder,
                  depth_encoder_paras,
-                 depth_actor,
+                 depth_actor_critic,  # 改为 ActorCriticRMA
                  num_learning_epochs=1,
                  num_mini_batches=1,
                  clip_param=0.2,
@@ -83,9 +83,7 @@ class PPO:
                  **kwargs
                  ):
 
-        
         self.device = device
-
         self.desired_kl = desired_kl
         self.schedule = schedule
         self.learning_rate = learning_rate
@@ -96,6 +94,7 @@ class PPO:
         self.storage = None # initialized later
         self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=learning_rate)
         self.transition = RolloutStorage.Transition()
+        
 
         # PPO parameters
         self.clip_param = clip_param
@@ -127,8 +126,11 @@ class PPO:
             self.depth_encoder = depth_encoder
             self.depth_encoder_optimizer = optim.Adam(self.depth_encoder.parameters(), lr=depth_encoder_paras["learning_rate"])
             self.depth_encoder_paras = depth_encoder_paras
-            self.depth_actor = depth_actor
-            self.depth_actor_optimizer = optim.Adam([*self.depth_actor.parameters(), *self.depth_encoder.parameters()], lr=depth_encoder_paras["learning_rate"])
+            # Depth components - 使用完整的 ActorCriticRMA
+            self.depth_actor_critic = depth_actor_critic
+            self.depth_actor_critic.to(self.device)
+            self.depth_optimizer = optim.Adam(self.depth_actor_critic.parameters(), lr=learning_rate)
+            self.depth_transition = RolloutStorage.Transition()
 
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
         self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape,  critic_obs_shape, action_shape, self.device)
@@ -159,6 +161,41 @@ class PPO:
         self.transition.critic_observations = critic_obs
 
         return self.transition.actions
+    
+    def act_depth(self, obs, critic_obs, depth_latent, hist_encoding=False):
+        """
+        使用 depth_actor_critic 执行动作,用 depth_latent 替代 scandots_latent
+        类似于 learn_vision 中的方式
+        """
+        if self.depth_actor_critic.is_recurrent:
+            self.transition.hidden_states = self.depth_actor_critic.get_hidden_states()
+        
+        # 🔥 关键:使用 depth_latent 作为 scandots_latent 参数
+        # 类似于 learn_vision 中: self.alg.depth_actor(obs, hist_encoding=True, scandots_latent=depth_latent)
+        mean = self.depth_actor_critic.actor(obs, hist_encoding=hist_encoding, scandots_latent=depth_latent)
+        
+        # 创建分布
+        self.depth_actor_critic.distribution = torch.distributions.Normal(
+            mean, 
+            mean * 0. + self.depth_actor_critic.std
+        )
+        
+        # 采样动作
+        actions = self.depth_actor_critic.distribution.sample()
+        
+        # 填充 transition
+        self.transition.actions = actions
+        self.transition.values = self.depth_actor_critic.evaluate(critic_obs)
+        self.transition.actions_log_prob = self.depth_actor_critic.get_actions_log_prob(actions)
+        self.transition.action_mean = self.depth_actor_critic.action_mean
+        self.transition.action_sigma = self.depth_actor_critic.action_std
+        self.transition.observations = obs
+        self.transition.critic_observations = critic_obs
+        
+        if self.depth_actor_critic.is_recurrent:
+            self.transition.hidden_states = self.depth_actor_critic.get_hidden_states()
+        
+        return actions.detach()
     
     def process_env_step(self, rewards, dones, infos):
         rewards_total = rewards.clone()
@@ -347,6 +384,94 @@ class PPO:
             nn.utils.clip_grad_norm_([*self.depth_actor.parameters(), *self.depth_encoder.parameters()], self.max_grad_norm)
             self.depth_actor_optimizer.step()
             return depth_encoder_loss.item(), depth_actor_loss.item()
+        
+    def update_depth_scan_encoder(self, depth_latent_buffer, scandots_buffer):
+        if self.if_depth:
+            depth_latent_batch = torch.cat(depth_latent_buffer, dim=0)
+            scandots_latent_batch = torch.cat(scandots_buffer, dim=0)
+            
+            # 🔍 1. 检查数据分布
+            print("\n" + "="*80)
+            print("📊 数据分布检查:")
+            print(f"  depth_latent_batch: shape={depth_latent_batch.shape}, mean={depth_latent_batch.mean():.4f}, std={depth_latent_batch.std():.4f}")
+            print(f"  scandots_latent_batch: shape={scandots_latent_batch.shape}, mean={scandots_latent_batch.mean():.4f}, std={scandots_latent_batch.std():.4f}")
+            
+            initial_distance = (scandots_latent_batch - depth_latent_batch).norm(p=2, dim=1).mean()
+            print(f"  初始 L2 距离: {initial_distance:.4f}")
+            
+            if torch.allclose(scandots_latent_batch, depth_latent_batch.detach(), atol=1e-3):
+                print("  ⚠️  警告: scandots 和 depth_latent 几乎相同!")
+            
+            # 🔍 2. 保存 backbone 的参数快照
+            backbone_params_before = {}
+            print(f"\n📦 Depth Encoder 结构:")
+            print(f"  类型: {type(self.depth_encoder).__name__}")
+            
+            # 检查是否有 base_backbone
+            if hasattr(self.depth_encoder, 'base_backbone'):
+                print(f"  包含 base_backbone: {type(self.depth_encoder.base_backbone).__name__}")
+                for name, param in self.depth_encoder.base_backbone.named_parameters():
+                    if param.requires_grad:
+                        backbone_params_before[f"base_backbone.{name}"] = param.data.clone()
+            
+            # 保存所有参数
+            all_params_before = {}
+            for name, param in self.depth_encoder.named_parameters():
+                if param.requires_grad:
+                    all_params_before[name] = param.data.clone()
+            
+            print(f"  总参数数量: {len(all_params_before)}")
+            print(f"  base_backbone 参数: {len(backbone_params_before)}")
+            
+            # 计算损失
+            depth_encoder_loss = (scandots_latent_batch.detach() - depth_latent_batch).norm(p=2, dim=1).mean()
+            
+            # 🔍 3. 检查梯度
+            print(f"\n🔍 梯度检查:")
+            print(f"  depth_encoder_loss.requires_grad: {depth_encoder_loss.requires_grad}")
+            print(f"  depth_encoder_loss.item(): {depth_encoder_loss.item():.6f}")
+            
+            self.depth_encoder_optimizer.zero_grad()
+            depth_encoder_loss.backward()
+            
+            # 🔥 完整的梯度检查
+            print(f"\n📊 完整梯度统计:")
+            
+            # 1. 检查 base_backbone
+            backbone_has_grad = False
+            print(f"\n  🔹 Base Backbone:")
+            for name, param in self.depth_encoder.base_backbone.named_parameters():
+                if param.requires_grad:
+                    if param.grad is not None:
+                        grad_norm = param.grad.norm().item()
+                        if grad_norm > 1e-8:
+                            backbone_has_grad = True
+                            print(f"    ✅ base_backbone.{name}: {grad_norm:.6e}")
+                        else:
+                            print(f"    ⚠️  base_backbone.{name}: {grad_norm:.6e} (接近0)")
+                    else:
+                        print(f"    ❌ base_backbone.{name}: None")
+            
+            if not backbone_has_grad:
+                print(f"    ❌ 错误: Base Backbone 没有梯度!")
+            
+            # 2. 检查 RecurrentDepthBackbone
+            print(f"\n  🔹 Recurrent Layers:")
+            for name, param in self.depth_encoder.named_parameters():
+                if param.requires_grad and not name.startswith('base_backbone'):
+                    if param.grad is not None:
+                        grad_norm = param.grad.norm().item()
+                        if grad_norm > 1e-8:
+                            print(f"    ✅ {name}: {grad_norm:.6e}")
+            
+            # 梯度裁剪
+            total_grad_norm = nn.utils.clip_grad_norm_(self.depth_encoder.parameters(), self.max_grad_norm)
+            print(f"  总梯度范数 (裁剪前): {total_grad_norm:.6e}")
+            
+            # 优化器步进
+            self.depth_encoder_optimizer.step()
+            
+            return depth_encoder_loss.item()
     
     def update_counter(self):
         self.counter += 1

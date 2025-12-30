@@ -50,11 +50,11 @@ import warnings
 class OnPolicyRunner:
 
     def __init__(self,
-                 env: VecEnv,
-                 train_cfg,
-                 log_dir=None,
-                 init_wandb=True,
-                 device='cpu', **kwargs):
+                env: VecEnv,
+                train_cfg,
+                log_dir=None,
+                init_wandb=True,
+                device='cpu', **kwargs):
 
         self.cfg=train_cfg["runner"]
         self.alg_cfg = train_cfg["algorithm"]
@@ -65,37 +65,68 @@ class OnPolicyRunner:
         self.env = env
 
         print("Using MLP and Priviliged Env encoder ActorCritic structure")
-        actor_critic: ActorCriticRMA = ActorCriticRMA(self.env.cfg.env.n_proprio,
-                                                      self.env.cfg.env.n_scan,
-                                                      self.env.num_obs,
-                                                      self.env.cfg.env.n_priv_latent,
-                                                      self.env.cfg.env.n_priv,
-                                                      self.env.cfg.env.history_len,
-                                                      self.env.num_actions,
-                                                      **self.policy_cfg).to(self.device)
-        estimator = Estimator(input_dim=env.cfg.env.n_proprio, output_dim=env.cfg.env.n_priv, hidden_dims=self.estimator_cfg["hidden_dims"]).to(self.device)
+        actor_critic: ActorCriticRMA = ActorCriticRMA(
+            self.env.cfg.env.n_proprio,
+            self.env.cfg.env.n_scan,
+            self.env.num_obs,
+            self.env.cfg.env.n_priv_latent,
+            self.env.cfg.env.n_priv,
+            self.env.cfg.env.history_len,
+            self.env.num_actions,
+            **self.policy_cfg
+        ).to(self.device)
+        
+        estimator = Estimator(
+            input_dim=env.cfg.env.n_proprio, 
+            output_dim=env.cfg.env.n_priv, 
+            hidden_dims=self.estimator_cfg["hidden_dims"]
+        ).to(self.device)
+        
+        
+
         # Depth encoder
         self.if_depth = self.depth_encoder_cfg["if_depth"]
         if self.if_depth:
-            depth_backbone = DepthOnlyFCBackbone58x87(env.cfg.env.n_proprio, 
-                                                    self.policy_cfg["scan_encoder_dims"][-1], 
-                                                    self.depth_encoder_cfg["hidden_dims"],
-                                                    )
-            depth_encoder = RecurrentDepthBackbone(depth_backbone, env.cfg).to(self.device)
-            depth_actor = deepcopy(actor_critic.actor)
+            # 1️⃣ 先创建 base_backbone
+            base_backbone = DepthOnlyFCBackbone58x87(
+                prop_dim=self.env.cfg.env.n_proprio,
+                scandots_output_dim=32,  # depth latent 维度
+                hidden_state_dim=512,
+                output_activation="tanh"
+            )
+            
+            # 2️⃣ 再创建 RecurrentDepthBackbone (只需要 2 个参数!)
+            depth_encoder = RecurrentDepthBackbone(
+                base_backbone,      # 第1个参数
+                self.env.cfg        # 第2个参数 (env_cfg)
+            ).to(self.device)
+            
+            # 3️⃣ 创建 depth_actor_critic
+            depth_actor_critic = ActorCriticRMA(
+                self.env.cfg.env.n_proprio,
+                self.env.cfg.env.n_scan,
+                self.env.num_obs,
+                self.env.cfg.env.n_priv_latent,
+                self.env.cfg.env.n_priv,
+                self.env.cfg.env.history_len,
+                self.env.num_actions,
+                **self.policy_cfg
+            ).to(self.device)
         else:
             depth_encoder = None
-            depth_actor = None
-        # self.depth_encoder = depth_encoder
-        # self.depth_encoder_optimizer = optim.Adam(self.depth_encoder.parameters(), lr=self.depth_encoder_cfg["learning_rate"])
-        # self.depth_encoder_paras = self.depth_encoder_cfg
-        # self.depth_encoder_criterion = nn.MSELoss()
+            depth_actor_critic = None
+
+        
         # Create algorithm
         alg_class = eval(self.cfg["algorithm_class_name"]) # PPO
-        self.alg: PPO = alg_class(actor_critic, 
-                                  estimator, self.estimator_cfg, 
-                                  depth_encoder, self.depth_encoder_cfg, depth_actor,
-                                  device=self.device, **self.alg_cfg)
+        self.alg: PPO = alg_class(
+            actor_critic, 
+            estimator, self.estimator_cfg, 
+            depth_encoder, self.depth_encoder_cfg, 
+            depth_actor_critic,  # 传入完整的 ActorCriticRMA
+            device=self.device, 
+            **self.alg_cfg
+        )
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
         self.dagger_update_freq = self.alg_cfg["dagger_update_freq"]
@@ -108,7 +139,7 @@ class OnPolicyRunner:
             [self.env.num_actions],
         )
 
-        self.learn = self.learn_RL if not self.if_depth else self.learn_vision
+        self.learn = self.learn_RL if not self.if_depth else self.learn_vision_RL
             
         # Log
         self.log_dir = log_dir
@@ -324,6 +355,148 @@ class OnPolicyRunner:
                (it-self.start_learning_iteration >= 5000 and it % (5*self.save_interval) == 0):
                     self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
+
+    
+
+    def learn_vision_RL(self, num_learning_iterations, init_at_random_ep_len=False):
+        mean_value_loss = 0.
+        mean_surrogate_loss = 0.
+        mean_estimator_loss = 0.
+        mean_disc_loss = 0.
+        mean_disc_acc = 0.
+        mean_hist_latent_loss = 0.
+        mean_priv_reg_loss = 0. 
+        priv_reg_coef = 0.
+        entropy_coef = 0.
+        
+        if init_at_random_ep_len:
+            self.env.episode_length_buf = torch.randint_like(self.env.episode_length_buf, high=int(self.env.max_episode_length))
+        
+        obs = self.env.get_observations()
+        privileged_obs = self.env.get_privileged_observations()
+        critic_obs = privileged_obs if privileged_obs is not None else obs
+        obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
+        infos = {}
+        infos["depth"] = self.env.depth_buffer.clone().to(self.device)[:, -1] if self.if_depth else None
+        
+        self.alg.depth_encoder.train()
+        self.alg.depth_actor_critic.train()
+
+        ep_infos = []
+        rewbuffer = deque(maxlen=100)
+        rew_explr_buffer = deque(maxlen=100)
+        rew_entropy_buffer = deque(maxlen=100)
+        lenbuffer = deque(maxlen=100)
+        cur_reward_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
+        cur_reward_explr_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
+        cur_reward_entropy_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
+        cur_episode_length = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
+
+        tot_iter = self.current_learning_iteration + num_learning_iterations
+        self.start_learning_iteration = copy(self.current_learning_iteration)
+
+        for it in range(self.current_learning_iteration, tot_iter):
+            start = time.time()
+            hist_encoding = it % self.dagger_update_freq == 0
+            depth_latent_buffer = []
+            scandots_buffer = []
+            # Rollout
+            # with torch.inference_mode():
+            for i in range(self.num_steps_per_env):
+                # 获取 depth latent
+                if infos["depth"] is not None:
+                    obs_prop_depth = obs[:, :self.env.cfg.env.n_proprio].clone()
+                    obs_prop_depth[:, 6:8] = 0
+                    
+                    # ✅ 计算 depth_latent (带梯度,用于 depth encoder 训练)
+                    depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth)
+                    depth_latent = depth_latent_and_yaw[:, :-2]
+                    
+                    # print(self.num_steps_per_env)
+                    print(depth_latent.shape)
+                    depth_latent_buffer.append(depth_latent)
+                    print(f"depth_latent_buffer 长度: {len(depth_latent_buffer)}, 最新元素 shape: {depth_latent.shape}")
+                    
+                    # ✅ 收集 scandots latent
+                    with torch.no_grad():
+                        scandots_latent = obs[:, 53:53+132].clone()
+                        scandots_buffer.append(scandots_latent)
+
+                    # ✅ 关键:用 detach() 后的值替换 obs,避免梯度冲突
+                    # obs[:, 53:53+132] = depth_latent.detach()  # 添加 .detach()
+                # 使用 inference_mode 执行动作
+                with torch.inference_mode():
+                    actions = self.alg.act(obs, critic_obs, infos, hist_encoding)
+                
+                obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
+                critic_obs = privileged_obs if privileged_obs is not None else obs
+                obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
+                
+                # 使用 PPO 的 process_env_step - 与 learn_RL 完全一致
+                total_rew = self.alg.process_env_step(rewards, dones, infos)
+                
+                if self.log_dir is not None:
+                    # Book keeping
+                    if 'episode' in infos:
+                        ep_infos.append(infos['episode'])
+                    cur_reward_sum += total_rew
+                    cur_reward_explr_sum += 0
+                    cur_reward_entropy_sum += 0
+                    cur_episode_length += 1
+                    
+                    new_ids = (dones > 0).nonzero(as_tuple=False)
+                    
+                    rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
+                    rew_explr_buffer.extend(cur_reward_explr_sum[new_ids][:, 0].cpu().numpy().tolist())
+                    rew_entropy_buffer.extend(cur_reward_entropy_sum[new_ids][:, 0].cpu().numpy().tolist())
+                    lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
+                    
+                    cur_reward_sum[new_ids] = 0
+                    cur_reward_explr_sum[new_ids] = 0
+                    cur_reward_entropy_sum[new_ids] = 0
+                    cur_episode_length[new_ids] = 0
+
+            stop = time.time()
+            collection_time = stop - start
+
+            print(f"depth_latent 所在设备: {depth_latent.device}")
+
+            # Learning step
+            start = stop
+            self.alg.compute_returns(critic_obs)
+            
+            # 使用 PPO 更新策略 - 与 learn_RL 完全一致
+            depth_scan_loss = self.alg.update_depth_scan_encoder(depth_latent_buffer = depth_latent_buffer, scandots_buffer = scandots_buffer)
+            
+            print(f"depth_scan_loss: {depth_scan_loss:.6f}")
+            
+            mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_disc_loss, mean_disc_acc, mean_priv_reg_loss, priv_reg_coef = self.alg.update()
+            if hist_encoding:
+                print("Updating dagger...")
+                mean_hist_latent_loss = self.alg.update_dagger()
+            
+            stop = time.time()
+            learn_time = stop - start
+            
+            # 分离 depth encoder 的隐藏状态
+            self.alg.depth_encoder.detach_hidden_states()
+            
+            if self.log_dir is not None:
+                self.log(locals())
+            
+            if it < 2500:
+                if it % self.save_interval == 0:
+                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+            elif it < 5000:
+                if it % (2*self.save_interval) == 0:
+                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+            else:
+                if it % (5*self.save_interval) == 0:
+                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+            ep_infos.clear()
+        
+        self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
+
     
     def log_vision(self, locs, width=80, pad=35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
@@ -426,6 +599,11 @@ class OnPolicyRunner:
         wandb_dict['Loss/discriminator'] = locs['mean_disc_loss']
         wandb_dict['Loss/discriminator_accuracy'] = locs['mean_disc_acc']
 
+        # ✅ 添加 depth_scan_loss
+        if 'depth_scan_loss' in locs:
+            wandb_dict['Loss_depth/depth_scan_encoder'] = locs['depth_scan_loss']
+
+
         wandb_dict['Policy/mean_noise_std'] = mean_std.item()
         wandb_dict['Perf/total_fps'] = fps
         wandb_dict['Perf/collection time'] = locs['collection_time']
@@ -495,7 +673,7 @@ class OnPolicyRunner:
             }
         if self.if_depth:
             state_dict['depth_encoder_state_dict'] = self.alg.depth_encoder.state_dict()
-            state_dict['depth_actor_state_dict'] = self.alg.depth_actor.state_dict()
+            state_dict['depth_actor_critic_state_dict'] = self.alg.depth_actor_critic.state_dict()  # 改为 depth_actor_critic
         torch.save(state_dict, path)
 
     def load(self, path, load_optimizer=True):
@@ -510,12 +688,19 @@ class OnPolicyRunner:
             else:
                 print("Saved depth encoder detected, loading...")
                 self.alg.depth_encoder.load_state_dict(loaded_dict['depth_encoder_state_dict'])
-            if 'depth_actor_state_dict' in loaded_dict:
-                print("Saved depth actor detected, loading...")
-                self.alg.depth_actor.load_state_dict(loaded_dict['depth_actor_state_dict'])
+            
+            # 兼容旧版本的 depth_actor 和新版本的 depth_actor_critic
+            if 'depth_actor_critic_state_dict' in loaded_dict:
+                print("Saved depth_actor_critic detected, loading...")
+                self.alg.depth_actor_critic.load_state_dict(loaded_dict['depth_actor_critic_state_dict'])
+            elif 'depth_actor_state_dict' in loaded_dict:
+                print("Saved depth_actor (old version) detected, loading into depth_actor_critic.actor...")
+                # 只加载 actor 部分,critic 保持随机初始化
+                self.alg.depth_actor_critic.actor.load_state_dict(loaded_dict['depth_actor_state_dict'])
             else:
-                print("No saved depth actor, Copying actor critic actor to depth actor...")
-                self.alg.depth_actor.load_state_dict(self.alg.actor_critic.actor.state_dict())
+                print("No saved depth_actor or depth_actor_critic, Copying actor_critic.actor to depth_actor_critic.actor...")
+                self.alg.depth_actor_critic.actor.load_state_dict(self.alg.actor_critic.actor.state_dict())
+        
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
         # self.current_learning_iteration = loaded_dict['iter']

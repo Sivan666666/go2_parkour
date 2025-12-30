@@ -905,17 +905,33 @@ class LeggedRobot(BaseTask):
         # return depth_image[..., 5:-5, 60:-5]
         return depth_image[..., 2:-2, 15:-2]
 
+
     def update_depth_buffer(self):
         if not self.cfg.depth.use_camera:
+            #print("1111")
             return
 
+        # print("self.global_counter:", self.global_counter)
+        # print("self.cfg.depth.update_interval:", self.cfg.depth.update_interval)
         if self.global_counter % self.cfg.depth.update_interval != 0:
+            #print("2222")
             return
-        self.gym.step_graphics(self.sim) # required to render in headless mode
+        
+        print("3333")
+
+        import time
+        total_start = time.time()
+        timings = {}
+        
+        # 1️⃣ 图形渲染
+        t0 = time.time()
+        self.gym.step_graphics(self.sim)
         self.gym.render_all_camera_sensors(self.sim)
         self.gym.start_access_image_tensors(self.sim)
-
-        # 1. 批量获取所有深度图
+        timings['1_graphics_render'] = (time.time() - t0) * 1000
+        
+        # 2️⃣ 批量获取所有深度图
+        t0 = time.time()
         raw_depth_images = []
         for i in range(self.num_envs):
             depth_image_ = self.gym.get_camera_image_gpu_tensor(self.sim, 
@@ -923,42 +939,150 @@ class LeggedRobot(BaseTask):
                                                                 self.cam_handles[i],
                                                                 gymapi.IMAGE_DEPTH)
             raw_depth_images.append(gymtorch.wrap_tensor(depth_image_))
-            # print(f"Raw depth image {i} shape: {depth_image_.shape}")
-
-        # 将列表堆叠成一个批次张量
-        batch_depth_images = torch.stack(raw_depth_images, dim=0)
-        # print(f"batch_depth_images shape: {batch_depth_images.shape}")
-        # 2. 对整个批次进行并行处理
-        processed_images = self.process_depth_image(batch_depth_images)
+        timings['2_get_raw_images'] = (time.time() - t0) * 1000
         
+        # 3️⃣ 堆叠成批次
+        t0 = time.time()
+        batch_depth_images = torch.stack(raw_depth_images, dim=0)
+        timings['3_stack_batch'] = (time.time() - t0) * 1000
+        
+        # 4️⃣ 图像处理(包含所有噪声)
+        t0 = time.time()
+        processed_images = self.process_depth_image(batch_depth_images)
+        timings['4_process_images'] = (time.time() - t0) * 1000
+        
+        # 5️⃣ 准备初始化标志
+        t0 = time.time()
         init_flags = self.episode_length_buf <= 1
-        # 确保init_flags是一维张量
         init_flags = init_flags.squeeze() if len(init_flags.shape) > 1 else init_flags
-
-        # 对于需要初始化的环境：过滤合法索引，避免越界
+        timings['5_prepare_flags'] = (time.time() - t0) * 1000
+        
+        # 6️⃣ 初始化新环境的深度缓冲
+        t0 = time.time()
         init_env_ids = init_flags.nonzero(as_tuple=False).flatten()
-        # 过滤掉超出num_envs的非法索引
         init_env_ids = init_env_ids[init_env_ids < self.num_envs]
         if len(init_env_ids) > 0:
-            # 正确堆叠：先扩展维度再重复，避免列表乘法的浅拷贝问题
-            init_depth = processed_images[init_env_ids].unsqueeze(1)  # [N, 1, H, W]
-            init_depth = init_depth.repeat(1, self.cfg.depth.buffer_len, 1, 1)  # [N, buffer_len, H, W]
+            init_depth = processed_images[init_env_ids].unsqueeze(1)
+            init_depth = init_depth.repeat(1, self.cfg.depth.buffer_len, 1, 1)
             self.depth_buffer[init_env_ids] = init_depth
-
-        # 对于需要更新的环境：同样过滤合法索引
+        timings['6_init_buffer'] = (time.time() - t0) * 1000
+        
+        # 7️⃣ 更新现有环境的深度缓冲
+        t0 = time.time()
         update_env_ids = (~init_flags).nonzero(as_tuple=False).flatten()
-        # 过滤掉超出num_envs的非法索引
         update_env_ids = update_env_ids[update_env_ids < self.num_envs]
         if len(update_env_ids) > 0:
-            # 提取需要保留的历史数据 [M, buffer_len-1, H, W]
             prev_depth = self.depth_buffer[update_env_ids, 1:]
-            # 新增的深度图：扩展维度到 [M, 1, H, W]
             new_depth = processed_images[update_env_ids].unsqueeze(1)
-
             self.depth_buffer[update_env_ids] = torch.cat([prev_depth, new_depth], dim=1)
-
-
+        timings['7_update_buffer'] = (time.time() - t0) * 1000
+        
+        # 8️⃣ 结束访问图像张量
+        t0 = time.time()
         self.gym.end_access_image_tensors(self.sim)
+        timings['8_end_access'] = (time.time() - t0) * 1000
+        
+        timings['TOTAL'] = (time.time() - total_start) * 1000
+        
+        # 📊 累积统计
+        if not hasattr(self, '_depth_buffer_timings'):
+            self._depth_buffer_timings = {}
+            self._depth_buffer_counter = 0
+        
+        for key, value in timings.items():
+            if key not in self._depth_buffer_timings:
+                self._depth_buffer_timings[key] = 0.0
+            self._depth_buffer_timings[key] += value
+        
+        self._depth_buffer_counter += 1
+        
+        # 每100次打印一次统计
+        if self._depth_buffer_counter % 10 == 0:
+            print("\n" + "="*90)
+            print(f"📷 深度缓冲更新性能分析 (平均值, 基于 {self._depth_buffer_counter} 次调用)")
+            print("="*90)
+            
+            steps = [
+                ('1_graphics_render', '图形渲染'),
+                ('2_get_raw_images', f'获取原始图像({self.num_envs}个环境)'),
+                ('3_stack_batch', '堆叠成批次'),
+                ('4_process_images', '图像处理(噪声+归一化+缩放)'),
+                ('5_prepare_flags', '准备初始化标志'),
+                ('6_init_buffer', f'初始化缓冲({len(init_env_ids)}个环境)'),
+                ('7_update_buffer', f'更新缓冲({len(update_env_ids)}个环境)'),
+                ('8_end_access', '结束访问图像张量'),
+            ]
+            
+            total_time = self._depth_buffer_timings['TOTAL'] / self._depth_buffer_counter
+            
+            for key, desc in steps:
+                if key in self._depth_buffer_timings:
+                    avg_time = self._depth_buffer_timings[key] / self._depth_buffer_counter
+                    percentage = (avg_time / total_time * 100) if total_time > 0 else 0
+                    print(f"  {desc:.<60} {avg_time:>10.4f} ms  ({percentage:>5.1f}%)")
+            
+            print("-"*90)
+            print(f"  {'✅ 总计':.<60} {total_time:>10.4f} ms")
+            print("="*90 + "\n")
+            
+            # 重置计数器
+            self._depth_buffer_counter = 0
+            self._depth_buffer_timings = {}
+
+    # def update_depth_buffer(self):
+    #     if not self.cfg.depth.use_camera:
+    #         return
+
+    #     if self.global_counter % self.cfg.depth.update_interval != 0:
+    #         return
+    #     self.gym.step_graphics(self.sim) # required to render in headless mode
+    #     self.gym.render_all_camera_sensors(self.sim)
+    #     self.gym.start_access_image_tensors(self.sim)
+
+    #     # 1. 批量获取所有深度图
+    #     raw_depth_images = []
+    #     for i in range(self.num_envs):
+    #         depth_image_ = self.gym.get_camera_image_gpu_tensor(self.sim, 
+    #                                                             self.envs[i], 
+    #                                                             self.cam_handles[i],
+    #                                                             gymapi.IMAGE_DEPTH)
+    #         raw_depth_images.append(gymtorch.wrap_tensor(depth_image_))
+    #         # print(f"Raw depth image {i} shape: {depth_image_.shape}")
+
+    #     # 将列表堆叠成一个批次张量
+    #     batch_depth_images = torch.stack(raw_depth_images, dim=0)
+    #     # print(f"batch_depth_images shape: {batch_depth_images.shape}")
+    #     # 2. 对整个批次进行并行处理
+    #     processed_images = self.process_depth_image(batch_depth_images)
+        
+    #     init_flags = self.episode_length_buf <= 1
+    #     # 确保init_flags是一维张量
+    #     init_flags = init_flags.squeeze() if len(init_flags.shape) > 1 else init_flags
+
+    #     # 对于需要初始化的环境：过滤合法索引，避免越界
+    #     init_env_ids = init_flags.nonzero(as_tuple=False).flatten()
+    #     # 过滤掉超出num_envs的非法索引
+    #     init_env_ids = init_env_ids[init_env_ids < self.num_envs]
+    #     if len(init_env_ids) > 0:
+    #         # 正确堆叠：先扩展维度再重复，避免列表乘法的浅拷贝问题
+    #         init_depth = processed_images[init_env_ids].unsqueeze(1)  # [N, 1, H, W]
+    #         init_depth = init_depth.repeat(1, self.cfg.depth.buffer_len, 1, 1)  # [N, buffer_len, H, W]
+    #         self.depth_buffer[init_env_ids] = init_depth
+
+    #     # 对于需要更新的环境：同样过滤合法索引
+    #     update_env_ids = (~init_flags).nonzero(as_tuple=False).flatten()
+    #     # 过滤掉超出num_envs的非法索引
+    #     update_env_ids = update_env_ids[update_env_ids < self.num_envs]
+    #     if len(update_env_ids) > 0:
+    #         # 提取需要保留的历史数据 [M, buffer_len-1, H, W]
+    #         prev_depth = self.depth_buffer[update_env_ids, 1:]
+    #         # 新增的深度图：扩展维度到 [M, 1, H, W]
+    #         new_depth = processed_images[update_env_ids].unsqueeze(1)
+
+    #         self.depth_buffer[update_env_ids] = torch.cat([prev_depth, new_depth], dim=1)
+
+
+    #     self.gym.end_access_image_tensors(self.sim)
 
     def _update_goals(self):
         next_flag = self.reach_goal_timer > self.cfg.env.reach_goal_delay / self.dt
