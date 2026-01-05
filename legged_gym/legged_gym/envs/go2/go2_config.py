@@ -184,7 +184,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         base_height_target = 0.3
         class scales:
             # tracking rewards
-            tracking_goal_vel = 0.05
+            tracking_goal_vel = 0.5
             tracking_ang_vel = 0.5
             tracking_lin_vel = 2.5
             # tracking_yaw = 0.25
@@ -206,7 +206,8 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
             feet_air_time = 0.01
             roll = -1.5
-            foot_contact = 2e-5
+            pitch = -0.05
+            # foot_contact = 2e-5
             
             # 根据HIMLOCO新加的奖励函数
             # base_height = -0.2
