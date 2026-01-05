@@ -295,7 +295,8 @@ class Terrain:
                 birth_area_length=birth_area_length,
                 step_width=step_width,
                 terrain_y_flat=terrain_y_flat,
-                difficulty = difficulty
+                difficulty = difficulty,
+                is_steep=True
             )
             self.add_roughness(terrain)
         elif choice < self.proportions[5]:
@@ -732,7 +733,7 @@ def stairs_terrain(terrain, step_height, platform_size=1., staircase_length=5.0,
 
     return terrain
 
-def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_treshold, step_thickness=0.05, platform_size=1., staircase_length=5.0, num_goals=8, birth_area_length=3.0, step_width=0.4, terrain_y_flat = 1, difficulty = 0):
+def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_treshold, step_thickness=0.05, platform_size=1., staircase_length=5.0, num_goals=8, birth_area_length=3.0, step_width=0.4, terrain_y_flat = 1, difficulty = 0, is_steep=False):
     """
     生成一个镂空的楼梯，并可选择性地在其表面添加独立的Perlin噪声起伏。
     噪声生成使用TerrainPerlin，与barrier_track使用相同的逻辑。
@@ -988,7 +989,7 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
     goals_m.append([(current_x_pos_px + 2 * step_width_px) * terrain.horizontal_scale, platform_center_y_m, current_height_m])
 
 
-    # ------  6.加入栏杆和后部长方形横杆组  --------
+    # ------  6.加入栏杆和后部长方形横杆组和叉型  --------
 
     #栏杆
     # L实则为狗前进方向的R，R同理（因为我写代码默认L是减去，R是增加
@@ -1106,43 +1107,43 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
     Bar_2_z = (Bar_1_z + Bar_3_z) / 2
     Bar_L1 = bar_trimesh(
         center_position=(birth_area_length + rail_thickness + bar_x / 2, 
-                         rail_L_y, 
-                         Bar_1_z),
+                        rail_L_y, 
+                        Bar_1_z),
         delta_x=bar_x,
         delta_z=bar_z
     )
     Bar_R1 = bar_trimesh(
         center_position=(birth_area_length + rail_thickness + bar_x / 2, 
-                         rail_R_y, 
-                         Bar_1_z),
+                        rail_R_y, 
+                        Bar_1_z),
         delta_x=bar_x,
         delta_z=bar_z
     )
     Bar_L3 = bar_trimesh(
         center_position=(birth_area_length + rail_thickness + bar_x / 2, 
-                         rail_L_y, 
-                         Bar_3_z),
+                        rail_L_y, 
+                        Bar_3_z),
         delta_x=bar_x,
         delta_z=bar_z
     )
     Bar_R3 = bar_trimesh(
         center_position=(birth_area_length + rail_thickness + bar_x / 2, 
-                         rail_R_y, 
-                         Bar_3_z),
+                        rail_R_y, 
+                        Bar_3_z),
         delta_x=bar_x,
         delta_z=bar_z
     )
     Bar_L2 = bar_trimesh(
         center_position=(birth_area_length + rail_thickness + bar_x / 2, 
-                         rail_L_y, 
-                         Bar_2_z),
+                        rail_L_y, 
+                        Bar_2_z),
         delta_x=bar_x,
         delta_z=bar_z
     )
     Bar_R2 = bar_trimesh(
         center_position=(birth_area_length + rail_thickness + bar_x / 2, 
-                         rail_R_y, 
-                         Bar_2_z),
+                        rail_R_y, 
+                        Bar_2_z),
         delta_x=bar_x,
         delta_z=bar_z
     )
@@ -1175,6 +1176,15 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
         con_L,
         con_R,
     )
+    if(is_steep):
+        Down_Mid = trimesh.box_trimesh(
+            size=(rail_thickness, terrain_length_m - 2*terrain_y_flat, rail_thickness),
+            center_position=(birth_area_length + rail_mid, terrain_length_m / 2, step_height_first * 0.13 / 0.35 + rail_mid)
+        )
+        final_siderail = trimesh.combine_trimeshes(
+            final_siderail,
+            Down_Mid,
+        )
     terrain.trimeshes.append(final_siderail)
 
     # 后部长方形横杆组
@@ -1221,6 +1231,25 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
         back_rail_R_out_downward,
     )
     terrain.trimeshes.append(final_backrail)
+
+    #叉型
+    back_rail_x = current_x_pos_m + platform_width_m - rail_mid
+    cross_length = np.sqrt( (current_height_m - back_rail_z - rail_thickness * 3) **2 + (terrain_length_m - 2 * terrain_y_flat - rail_thickness) **2 )
+    cross_1 = trimesh.box_trimesh(
+        size=(rail_thickness, cross_length, rail_thickness),
+        center_position=(back_rail_x - rail_thickness, center_y_m, (back_rail_z + current_height_m - step_mid) / 2),
+        rpy = (np.arctan2(current_height_m - back_rail_z - rail_thickness * 2, (terrain_length_m - 2 * terrain_y_flat)), 0, 0)
+    )
+    cross_2 = trimesh.box_trimesh(
+        size=(rail_thickness, cross_length, rail_thickness),
+        center_position=(back_rail_x + rail_thickness, center_y_m, (back_rail_z + current_height_m - step_mid) / 2),
+        rpy = (-np.arctan2(current_height_m - back_rail_z - rail_thickness * 2, (terrain_length_m - 2 * terrain_y_flat)), 0, 0)
+    )   
+    final_cross = trimesh.combine_trimeshes(
+        cross_1,
+        cross_2,
+    )
+    terrain.trimeshes.append(final_cross)
     # ---------------------------------------
 
     # --- 7. 赋值 ---
@@ -1229,6 +1258,7 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
     terrain.heightsamples[:, :] = heightsamples[:, :]
     # print("1111111111111111111111111111111111111111111111111111111111111111111")
     return terrain
+
 
 
 

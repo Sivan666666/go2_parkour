@@ -733,7 +733,12 @@ class LeggedRobot(BaseTask):
         """处理深度图像 (全 GPU 优化版本)"""
         
         depth_images = self.crop_depth_image(depth_images)
-        depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]     
+        # depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0] 
+        # 
+        # ✅ 为每张图片的每个像素生成不同的距离噪声
+        # depth_images.shape = [num_envs, height, width]
+        noise = self.cfg.depth.dis_noise * 2 * (torch.rand_like(depth_images, device=self.device) - 0.5)
+        depth_images += noise    
 
         if getattr(self.cfg.depth, 'enable_noise', True):
             # 1) 近距离置为 -far_clip
