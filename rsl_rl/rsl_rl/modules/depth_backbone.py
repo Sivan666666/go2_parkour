@@ -819,9 +819,28 @@ class RecurrentDepthBackbone_Original(nn.Module):
         self.hidden_states = None
 
     def forward(self, depth_image, proprioception):
+
+        batch_size = depth_image.shape[0]
+        
+        # 🔥 修复: 动态调整隐藏状态 batch size
+        if self.hidden_states is None or self.hidden_states.size(1) != batch_size:
+            # 重新初始化隐藏状态以匹配当前 batch size
+            self.hidden_states = torch.zeros(
+                1,  # num_layers
+                batch_size, 
+                512,  # hidden_size
+                device=depth_image.device,
+                dtype=depth_image.dtype
+            )
+
+        # 🔥 修复2: 使用 detached 的隐藏状态（断开计算图）
+        # 这样每次 forward 都是独立的计算图
+        hidden_input = self.hidden_states.detach()
+
         depth_image = self.base_backbone(depth_image)
         depth_latent = self.combination_mlp(torch.cat((depth_image, proprioception), dim=-1))
-        depth_latent, self.hidden_states = self.rnn(depth_latent[:, None, :], self.hidden_states)
+        # 🔥 使用 detached 的隐藏状态
+        depth_latent, self.hidden_states = self.rnn(depth_latent[:, None, :], hidden_input)
         depth_latent = self.output_mlp(depth_latent.squeeze(1))
         
         return depth_latent

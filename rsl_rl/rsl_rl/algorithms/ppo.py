@@ -86,6 +86,11 @@ class PPO:
         
         self.device = device
 
+        # 🔥 检查 actor_critic 是否有 depth_encoder
+        self.if_depth = hasattr(actor_critic.actor, 'depth_encoder') and actor_critic.actor.depth_encoder is not None
+
+        
+
         self.desired_kl = desired_kl
         self.schedule = schedule
         self.learning_rate = learning_rate
@@ -96,6 +101,11 @@ class PPO:
         self.storage = None # initialized later
         self.optimizer = optim.Adam(self.actor_critic.parameters(), lr=learning_rate)
         self.transition = RolloutStorage.Transition()
+
+        print("🔥 Optimizer parameter groups:")
+        for name, param in self.actor_critic.named_parameters():
+            if 'depth_encoder' in name:
+                print(f"   ✅ {name}: requires_grad={param.requires_grad}")
 
         # PPO parameters
         self.clip_param = clip_param
@@ -122,16 +132,16 @@ class PPO:
         self.train_with_estimated_states = estimator_paras["train_with_estimated_states"]
 
         # Depth encoder
-        self.if_depth = depth_encoder != None
-        if self.if_depth:
-            self.depth_encoder = depth_encoder
-            self.depth_encoder_optimizer = optim.Adam(self.depth_encoder.parameters(), lr=depth_encoder_paras["learning_rate"])
-            self.depth_encoder_paras = depth_encoder_paras
-            self.depth_actor = depth_actor
-            self.depth_actor_optimizer = optim.Adam([*self.depth_actor.parameters(), *self.depth_encoder.parameters()], lr=depth_encoder_paras["learning_rate"])
+        # self.if_depth = depth_encoder != None
+        # if self.if_depth:
+        #     self.depth_encoder = depth_encoder
+        #     self.depth_encoder_optimizer = optim.Adam(self.depth_encoder.parameters(), lr=depth_encoder_paras["learning_rate"])
+        #     self.depth_encoder_paras = depth_encoder_paras
+        #     self.depth_actor = depth_actor
+        #     self.depth_actor_optimizer = optim.Adam([*self.depth_actor.parameters(), *self.depth_encoder.parameters()], lr=depth_encoder_paras["learning_rate"])
 
-    def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
-        self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape,  critic_obs_shape, action_shape, self.device)
+    def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):  
+        self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape,  critic_obs_shape, action_shape, self.device, if_depth=self.if_depth) 
 
     def test_mode(self):
         self.actor_critic.test()
@@ -142,14 +152,22 @@ class PPO:
     def act(self, obs, critic_obs, info, hist_encoding=False):
         if self.actor_critic.is_recurrent:
             self.transition.hidden_states = self.actor_critic.get_hidden_states()
+        
+        # 🔥 提取深度图
+        depth_image = info.get("depth") if info else None
+        # 🔥 存储深度图供后续训练使用 
+        self.transition.depth_images = depth_image.clone() if depth_image is not None else None
+    
+        
         # Compute the actions and values, use proprio to compute estimated priv_states then actions, but store true priv_states
         if self.train_with_estimated_states: #True
             obs_est = obs.clone()
             priv_states_estimated = self.estimator(obs_est[:, :self.num_prop])
             obs_est[:, self.num_prop+self.num_scan:self.num_prop+self.num_scan+self.priv_states_dim] = priv_states_estimated
-            self.transition.actions = self.actor_critic.act(obs_est, hist_encoding).detach()
+            self.transition.actions = self.actor_critic.act(obs_est, hist_encoding, depth_image=depth_image).detach()
         else:
-            self.transition.actions = self.actor_critic.act(obs, hist_encoding).detach()
+            self.transition.actions = self.actor_critic.act(obs, hist_encoding, depth_image=depth_image).detach()
+    
 
         self.transition.values = self.actor_critic.evaluate(critic_obs).detach()
         self.transition.actions_log_prob = self.actor_critic.get_actions_log_prob(self.transition.actions).detach()
@@ -192,10 +210,46 @@ class PPO:
             generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+        # 🔥 修改解包,添加 depth_images_batch
         for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
-            old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch in generator:
+            old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch, depth_images_batch in generator:
 
-                self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0]) # match distribution dimension
+                print(f"🔥 Debug Info - Beginning of mini-batch processing:")
+                print(f"🔥 Debug Info - Depth Encoder Exists: {self.if_depth}")
+                # 🔥 调试 1: 检查 depth_images_batch
+                if self.if_depth:
+                    print("=" * 80)
+                    print("🔥 调试信息 - Batch 1:")
+                    print(f"   depth_images_batch is None: {depth_images_batch is None}")
+                    if depth_images_batch is not None:
+                        print(f"   depth_images_batch.shape: {depth_images_batch.shape}")
+                        print(f"   depth_images_batch.device: {depth_images_batch.device}")
+                        print(f"   depth_images_batch.requires_grad: {depth_images_batch.requires_grad}")
+                        print(f"   depth_images_batch.dtype: {depth_images_batch.dtype}")
+                        print(f"   depth_images_batch.min(): {depth_images_batch.min().item():.4f}")
+                        print(f"   depth_images_batch.max(): {depth_images_batch.max().item():.4f}")
+                        print(f"   depth_images_batch.mean(): {depth_images_batch.mean().item():.4f}")
+                    print("=" * 80)
+
+                # 🔥 调试 2: 在 act 之前检查 depth_encoder 参数
+                if self.if_depth:
+                    print("🔥 调试信息 - Depth Encoder 参数 (before act):")
+                    for name, param in self.actor_critic.actor.depth_encoder.named_parameters():
+                        print(f"   {name}: requires_grad={param.requires_grad}, grad={param.grad is not None}")
+                        if param.grad is not None:
+                            print(f"      grad_norm={param.grad.norm().item():.6f}")
+
+
+                # 🔥 直接调用 actor_critic.act,传入 depth_images_batch
+                # actor 内部会自动使用 depth_encoder 计算 depth_latent
+                self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0], depth_image=depth_images_batch)
+
+                # 🔥 调试 3: 检查 act 之后的计算图
+                if self.if_depth:
+                    print("🔥 调试信息 - After act():")
+                    print(f"   action_mean.requires_grad: {self.actor_critic.action_mean.requires_grad}")
+                    print(f"   action_mean.grad_fn: {self.actor_critic.action_mean.grad_fn}")
+
 
                 actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
                 value_batch = self.actor_critic.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
@@ -261,6 +315,26 @@ class PPO:
                 # Gradient step
                 self.optimizer.zero_grad()
                 loss.backward()
+
+                        # 🔥 调试 7: backward 之后检查梯度
+                if self.if_depth:
+                    print("🔥 调试信息 - After backward():")
+                    has_grad = False
+                    for name, param in self.actor_critic.actor.depth_encoder.named_parameters():
+                        if param.grad is not None:
+                            grad_norm = param.grad.norm().item()
+                            print(f"   ✅ {name}: grad_norm={grad_norm:.6f}")
+                            has_grad = True
+                        else:
+                            print(f"   ❌ {name}: grad is None!")
+                    
+                    if not has_grad:
+                        print("   ⚠️  WARNING: 没有任何 depth_encoder 参数有梯度!")
+                        print("   可能原因:")
+                        print("   1. depth_image 没有参与 loss 计算")
+                        print("   2. depth_image 被 detach 了")
+                        print("   3. depth_encoder 的输出没有被使用")
+
                 nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
@@ -288,8 +362,9 @@ class PPO:
             generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+        # 🔥 添加 depth_images_batch 解包
         for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
-            old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch in generator:
+            old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch, depth_images_batch in generator:
                 with torch.inference_mode():
                     self.actor_critic.act(obs_batch, hist_encoding=True, masks=masks_batch, hidden_states=hid_states_batch[0])
 

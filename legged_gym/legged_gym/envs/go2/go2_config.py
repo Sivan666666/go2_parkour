@@ -95,7 +95,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
   
 
     class depth( LeggedRobotCfg.depth ):
-        use_camera = False
+        use_camera = True
         camera_num_envs = 192
         camera_terrain_num_rows = 10
         camera_terrain_num_cols = 20

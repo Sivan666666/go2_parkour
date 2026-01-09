@@ -94,7 +94,9 @@ class Actor(nn.Module):
                  priv_encoder_dims, 
                  num_priv_latent, 
                  num_priv_explicit, 
-                 num_hist, activation, 
+                 num_hist,
+                 activation, 
+                 depth_encoder=None,  # 🔥 新增参数
                  tanh_encoder_output=False) -> None:
         super().__init__()
         # prop -> scan -> priv_explicit -> priv_latent -> hist
@@ -106,6 +108,12 @@ class Actor(nn.Module):
         self.num_priv_latent = num_priv_latent
         self.num_priv_explicit = num_priv_explicit
         self.if_scan_encode = scan_encoder_dims is not None and num_scan > 0
+
+        # 🔥 存储 depth_encoder
+        self.depth_encoder = depth_encoder
+        self.use_depth = depth_encoder is not None
+
+        # activation_fn = get_activation(activation)
 
         if len(priv_encoder_dims) > 0:
                     priv_encoder_layers = []
@@ -139,11 +147,18 @@ class Actor(nn.Module):
             self.scan_encoder = nn.Identity()
             self.scan_encoder_output_dim = num_scan
         
+        
+        # print("num_prop", num_prop)
+        # print("self.scan_encoder_output_dim", self.scan_encoder_output_dim)
+        # print("num_priv_explicit", num_priv_explicit)
+        # print("priv_encoder_output_dim", priv_encoder_output_dim)
+
+
         actor_layers = []
         actor_layers.append(nn.Linear(num_prop+
                                       self.scan_encoder_output_dim+
                                       num_priv_explicit+
-                                      priv_encoder_output_dim, 
+                                      num_priv_latent, 
                                       actor_hidden_dims[0]))
         actor_layers.append(activation)
         for l in range(len(actor_hidden_dims)):
@@ -155,44 +170,51 @@ class Actor(nn.Module):
         if tanh_encoder_output:
             actor_layers.append(nn.Tanh())
         self.actor_backbone = nn.Sequential(*actor_layers)
+        print("self.actor_backbone shape:", self.actor_backbone)
 
-    def forward(self, obs, hist_encoding: bool, eval=False, scandots_latent=None):
-        if not eval:
-            if self.if_scan_encode:
-                obs_scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
-                if scandots_latent is None:
-                    scan_latent = self.scan_encoder(obs_scan)   
-                else:
-                    scan_latent = scandots_latent
-                obs_prop_scan = torch.cat([obs[:, :self.num_prop], scan_latent], dim=1)
-            else:
-                obs_prop_scan = obs[:, :self.num_prop + self.num_scan]
-            obs_priv_explicit = obs[:, self.num_prop + self.num_scan:self.num_prop + self.num_scan + self.num_priv_explicit]
-            if hist_encoding:
-                latent = self.infer_hist_latent(obs)
-            else:
-                latent = self.infer_priv_latent(obs)
-            backbone_input = torch.cat([obs_prop_scan, obs_priv_explicit, latent], dim=1)
-            backbone_output = self.actor_backbone(backbone_input)
-            return backbone_output
-        else:
-            if self.if_scan_encode:
-                obs_scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
-                if scandots_latent is None:
-                    scan_latent = self.scan_encoder(obs_scan)   
-                else:
-                    scan_latent = scandots_latent
-                obs_prop_scan = torch.cat([obs[:, :self.num_prop], scan_latent], dim=1)
-            else:
-                obs_prop_scan = obs[:, :self.num_prop + self.num_scan]
-            obs_priv_explicit = obs[:, self.num_prop + self.num_scan:self.num_prop + self.num_scan + self.num_priv_explicit]
-            if hist_encoding:
-                latent = self.infer_hist_latent(obs)
-            else:
-                latent = self.infer_priv_latent(obs)
-            backbone_input = torch.cat([obs_prop_scan, obs_priv_explicit, latent], dim=1)
-            backbone_output = self.actor_backbone(backbone_input)
-            return backbone_output
+    def forward(self, obs, hist_encoding: bool, eval=False, scandots_latent=None, depth_image=None):
+        """
+        Args:
+            obs: 原始观测 [batch, obs_dim]
+            hist_encoding: 是否使用历史编码
+            eval: 是否评估模式
+            scandots_latent: 外部提供的 scandots latent (用于某些特殊情况)
+            depth_image: 深度图输入 [batch, 58, 87] (🔥 新增)
+        """
+        # 🔥 如果提供了深度图,用 depth_encoder 计算 scandots_latent
+        if self.use_depth and depth_image is not None:
+            obs_prop_depth = obs[:, :self.num_prop].clone()
+            obs_prop_depth[:, 6:8] = 0  # 清零某些维度
+            
+            # 通过 depth_encoder 计算 depth_latent
+            depth_latent_and_yaw = self.depth_encoder(depth_image, obs_prop_depth)
+            scandots_latent = depth_latent_and_yaw[:, :-2]  # 去掉 yaw 部分
+            
+        # 如果没有提供 scandots_latent,则从 obs 中提取并编码
+        elif scandots_latent is None:
+            scandots = obs[:, self.num_prop:self.num_prop + self.num_scan]
+            scandots_latent = self.scan_encoder(scandots)
+
+            
+        
+        # 提取其他部分
+        priv_explicit = obs[:, self.num_prop + self.num_scan:self.num_prop + self.num_scan + self.num_priv_explicit]
+        priv_latent = obs[:, self.num_prop + self.num_scan + self.num_priv_explicit:
+                          self.num_prop + self.num_scan + self.num_priv_explicit + self.num_priv_latent]
+        
+        # 拼接所有特征
+        backbone_input = torch.cat([obs[:, :self.num_prop], scandots_latent, priv_explicit, priv_latent], dim=1)
+
+        # print("self.num_scan", self.num_scan)
+        # print("scandots_latent shape:", scandots_latent.shape)
+        # print("priv_explicit shape:", priv_explicit.shape)
+        # print("priv_latent shape:", priv_latent.shape)
+        # print("backbone_input shape:", backbone_input.shape)
+        
+        # 🔥 修复: 使用 self.actor_backbone 而不是 self.actor
+        backbone_output = self.actor_backbone(backbone_input)
+        
+        return backbone_output
     
     def infer_priv_latent(self, obs):
         priv = obs[:, self.num_prop + self.num_scan + self.num_priv_explicit: self.num_prop + self.num_scan + self.num_priv_explicit + self.num_priv_latent]
@@ -203,8 +225,18 @@ class Actor(nn.Module):
         return self.history_encoder(hist.view(-1, self.num_hist, self.num_prop))
     
     def infer_scandots_latent(self, obs):
-        scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
-        return self.scan_encoder(scan)
+        """推理 scandots latent (不使用深度图)"""
+        scandots = obs[:, self.num_prop:self.num_prop + self.num_scan]
+        return self.scan_encoder(scandots)
+    
+    def infer_depth_latent(self, depth_image, obs_prop):
+        """推理 depth latent (🔥 新增方法)"""
+        if not self.use_depth:
+            raise ValueError("depth_encoder is not available")
+        obs_prop_depth = obs_prop.clone()
+        obs_prop_depth[:, 6:8] = 0
+        depth_latent_and_yaw = self.depth_encoder(depth_image, obs_prop_depth)
+        return depth_latent_and_yaw[:, :-2]
 
 class ActorCriticRMA(nn.Module):
     is_recurrent = False
@@ -220,6 +252,7 @@ class ActorCriticRMA(nn.Module):
                         critic_hidden_dims=[256, 256, 256],
                         activation='elu',
                         init_noise_std=1.0,
+                        depth_encoder=None,  # 🔥 新增参数
                         **kwargs):
         if kwargs:
             print("ActorCritic.__init__ got unexpected arguments, which will be ignored: " + str([key for key in kwargs.keys()]))
@@ -229,11 +262,11 @@ class ActorCriticRMA(nn.Module):
         priv_encoder_dims= kwargs['priv_encoder_dims']
         activation = get_activation(activation)
         
-        self.actor = Actor(num_prop, num_scan, num_actions, scan_encoder_dims, actor_hidden_dims, priv_encoder_dims, num_priv_latent, num_priv_explicit, num_hist, activation, tanh_encoder_output=kwargs['tanh_encoder_output'])
+        self.actor = Actor(num_prop, num_scan, num_actions, scan_encoder_dims, actor_hidden_dims, priv_encoder_dims, num_priv_latent, num_priv_explicit, num_hist, activation,depth_encoder=depth_encoder, tanh_encoder_output=kwargs['tanh_encoder_output'])
         
 
         # Value function
-        critic_layers = []
+        critic_layers = [] 
         critic_layers.append(nn.Linear(num_critic_obs, critic_hidden_dims[0]))
         critic_layers.append(activation)
         for l in range(len(critic_hidden_dims)):
@@ -282,20 +315,38 @@ class ActorCriticRMA(nn.Module):
         mean = self.actor(observations, hist_encoding)
         self.distribution = Normal(mean, mean*0. + self.std)
 
-    def act(self, observations, hist_encoding=False, **kwargs):
-        self.update_distribution(observations, hist_encoding)
+    def act(self, observations, hist_encoding=False, depth_image=None, **kwargs):
+        """
+        Args:
+            observations: 原始观测
+            hist_encoding: 是否使用历史编码
+            depth_image: 深度图 (🔥 新增)
+        """
+        # print(depth_image)
+        # 🔥 调用 actor.forward,传入 depth_image
+        actions_mean = self.actor(observations, hist_encoding, depth_image=depth_image)
+
+        # 🔥 更新分布
+        self.distribution = Normal(actions_mean, actions_mean * 0. + self.std)
+
         return self.distribution.sample()
     
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
-    def act_inference(self, observations, hist_encoding=False, eval=False, scandots_latent=None, **kwargs):
-        if not eval:
-            actions_mean = self.actor(observations, hist_encoding, eval, scandots_latent)
-            return actions_mean
-        else:
-            actions_mean, latent_hist, latent_priv = self.actor(observations, hist_encoding, eval=True)
-            return actions_mean, latent_hist, latent_priv
+    def act_inference(self, observations, hist_encoding=False, eval=False, 
+                     scandots_latent=None, depth_image=None, **kwargs):
+        """
+        推理模式
+        """
+        # 🔥 支持三种模式:
+        # 1. 使用深度图 (depth_image)
+        # 2. 使用预计算的 scandots_latent
+        # 3. 使用原始 obs 中的 scandots
+        actions_mean = self.actor(observations, hist_encoding, eval, 
+                                  scandots_latent=scandots_latent, 
+                                  depth_image=depth_image)
+        return actions_mean
 
     def evaluate(self, critic_observations, **kwargs):
         value = self.critic(critic_observations)

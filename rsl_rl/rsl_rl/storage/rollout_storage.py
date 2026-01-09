@@ -46,16 +46,24 @@ class RolloutStorage:
             self.action_mean = None
             self.action_sigma = None
             self.hidden_states = None
+            self.depth_images = None   # 🔥 新增
         def clear(self):
             self.__init__()
 
-    def __init__(self, num_envs, num_transitions_per_env, obs_shape, privileged_obs_shape, actions_shape, device='cpu'):
+    def __init__(self, num_envs, num_transitions_per_env, obs_shape, privileged_obs_shape, actions_shape, device='cpu', if_depth=False):
 
         self.device = device
 
         self.obs_shape = obs_shape
         self.privileged_obs_shape = privileged_obs_shape
         self.actions_shape = actions_shape
+
+        # 🔥 新增: 存储深度图
+        self.if_depth = if_depth
+        if if_depth:
+            self.depth_images = torch.zeros(num_transitions_per_env, num_envs, 58, 87, device=self.device)
+        else:
+            self.depth_images = None
 
         # Core
         self.observations = torch.zeros(num_transitions_per_env, num_envs, *obs_shape, device=self.device)
@@ -97,6 +105,10 @@ class RolloutStorage:
         self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
         self.mu[self.step].copy_(transition.action_mean)
         self.sigma[self.step].copy_(transition.action_sigma)
+
+         # 🔥 存储深度图
+        if self.depth_images is not None and transition.depth_images is not None:
+            self.depth_images[self.step].copy_(transition.depth_images)
 
         self._save_hidden_states(transition.hidden_states)
         self.step += 1
@@ -171,6 +183,12 @@ class RolloutStorage:
         old_mu = self.mu.flatten(0, 1)
         old_sigma = self.sigma.flatten(0, 1)
 
+        # 🔥 flatten depth_images
+        if self.depth_images is not None:
+            depth_images = self.depth_images.flatten(0, 1)
+        else:
+            depth_images = None
+
         for epoch in range(num_epochs):
             for i in range(num_mini_batches):
 
@@ -188,10 +206,10 @@ class RolloutStorage:
                 old_mu_batch = old_mu[batch_idx]
                 old_sigma_batch = old_sigma[batch_idx]
 
-                
-                yield obs_batch, critic_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, \
-                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None, None), None
+                depth_images_batch = depth_images[batch_idx] if depth_images is not None else None
 
+                yield obs_batch, critic_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, \
+                    old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None, None), None, depth_images_batch
     # for RNNs only
     def reccurent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
 

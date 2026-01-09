@@ -65,24 +65,28 @@ class OnPolicyRunner:
         self.env = env
 
         print("Using MLP and Priviliged Env encoder ActorCritic structure")
-        actor_critic: ActorCriticRMA = ActorCriticRMA(self.env.cfg.env.n_proprio,
-                                                      self.env.cfg.env.n_scan,
-                                                      self.env.num_obs,
-                                                      self.env.cfg.env.n_priv_latent,
-                                                      self.env.cfg.env.n_priv,
-                                                      self.env.cfg.env.history_len,
-                                                      self.env.num_actions,
-                                                      **self.policy_cfg).to(self.device)
+        print("self.env.cfg.env.n_scan", self.env.cfg.env.n_scan)
+        # actor_critic: ActorCriticRMA = ActorCriticRMA(self.env.cfg.env.n_proprio,
+        #                                               self.env.cfg.env.n_scan,
+        #                                               self.env.num_obs,
+        #                                               self.env.cfg.env.n_priv_latent,
+        #                                               self.env.cfg.env.n_priv,
+        #                                               self.env.cfg.env.history_len,
+        #                                               self.env.num_actions,
+        #                                               **self.policy_cfg).to(self.device)
+        
         estimator = Estimator(input_dim=env.cfg.env.n_proprio, output_dim=env.cfg.env.n_priv, hidden_dims=self.estimator_cfg["hidden_dims"]).to(self.device)
         # Depth encoder
         self.if_depth = self.depth_encoder_cfg["if_depth"]
+        self.if_depth
+        print("self.if_depth:", self.if_depth)
         if self.if_depth:
             depth_backbone = DepthOnlyFCBackbone58x87(env.cfg.env.n_proprio, 
                                                     self.policy_cfg["scan_encoder_dims"][-1], 
                                                     self.depth_encoder_cfg["hidden_dims"],
                                                     )
             depth_encoder = RecurrentDepthBackbone(depth_backbone, env.cfg).to(self.device)
-            depth_actor = deepcopy(actor_critic.actor)
+            # depth_actor = deepcopy(actor_critic.actor)
         else:
             depth_encoder = None
             depth_actor = None
@@ -91,11 +95,26 @@ class OnPolicyRunner:
         # self.depth_encoder_paras = self.depth_encoder_cfg
         # self.depth_encoder_criterion = nn.MSELoss()
         # Create algorithm
-        alg_class = eval(self.cfg["algorithm_class_name"]) # PPO
+
+        # 🔥 创建 ActorCritic 时传入 depth_encoder
+        actor_critic: ActorCriticRMA = ActorCriticRMA(
+                                                    self.env.cfg.env.n_proprio,
+                                                    self.env.cfg.env.n_scan,
+                                                    self.env.num_obs,
+                                                    self.env.cfg.env.n_priv_latent,
+                                                    self.env.cfg.env.n_priv,
+                                                    self.env.cfg.env.history_len,
+                                                    self.env.num_actions,
+                                                    depth_encoder=depth_encoder,  # 🔥 传入
+                                                    **self.policy_cfg
+                                                ).to(self.device)
+
+        # 🔥 PPO 不再需要单独管理 depth_encoder
+        alg_class = eval(self.cfg["algorithm_class_name"])
         self.alg: PPO = alg_class(actor_critic, 
-                                  estimator, self.estimator_cfg, 
-                                  depth_encoder, self.depth_encoder_cfg, depth_actor,
-                                  device=self.device, **self.alg_cfg)
+                                estimator, self.estimator_cfg, 
+                                None, None, None,  # 不再传递 depth_encoder
+                                device=self.device, **self.alg_cfg)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
         self.dagger_update_freq = self.alg_cfg["dagger_update_freq"]
@@ -108,7 +127,7 @@ class OnPolicyRunner:
             [self.env.num_actions],
         )
 
-        self.learn = self.learn_RL if not self.if_depth else self.learn_vision
+        self.learn = self.learn_RL if not self.if_depth else self.learn_RL
             
         # Log
         self.log_dir = log_dir
@@ -139,7 +158,21 @@ class OnPolicyRunner:
         obs, critic_obs = obs.to(self.device), critic_obs.to(self.device)
         infos = {}
         infos["depth"] = self.env.depth_buffer.clone().to(self.device) if self.if_depth else None
-        self.alg.actor_critic.train() # switch to train mode (for dropout for example)
+        self.alg.actor_critic.train()
+
+        # 🔥 修复: 正确获取 depth_buffer
+        if self.if_depth:
+            depth_buffer = self.env.depth_buffer.clone().to(self.device)
+            # depth_buffer 形状: [num_envs, buffer_len, height, width] 或 [num_envs, 1, buffer_len, height, width]
+            
+            # 如果是 5D,去掉多余的维度
+            if depth_buffer.dim() == 5:
+                depth_buffer = depth_buffer.squeeze(1)  # [num_envs, buffer_len, height, width]
+            
+            # 取最新的帧: [num_envs, height, width]
+            infos["depth"] = depth_buffer[:, -1]  # 或者 depth_buffer.select(1, -1)
+        else:
+            infos["depth"] = None
 
         ep_infos = []
         rewbuffer = deque(maxlen=100)
@@ -155,16 +188,41 @@ class OnPolicyRunner:
         self.start_learning_iteration = copy(self.current_learning_iteration)
 
         for it in range(self.current_learning_iteration, tot_iter):
+            depth_latent_buffer = []
+            scandots_latent_buffer = []
+
             start = time.time()
             hist_encoding = it % self.dagger_update_freq == 0
 
             # Rollout
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
+                    # 🔥 删除手动计算 depth_latent 的代码
+                    # 现在 actor 内部会自动处理
+                    # if infos["depth"] != None:
+                    #     with torch.no_grad():
+                    #         scandots_latent = self.alg.actor_critic.actor.infer_scandots_latent(obs)
+                    #     scandots_latent_buffer.append(scandots_latent)
+                    #     obs_prop_depth = obs[:, :self.env.cfg.env.n_proprio].clone()
+                    #     obs_prop_depth[:, 6:8] = 0
+                    #     depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth)
+                    #     depth_latent = depth_latent_and_yaw[:, :-2]
+                    #     depth_latent_buffer.append(depth_latent)
+
+                    # 🔥 直接调用 act,PPO 内部会处理 depth_image
                     actions = self.alg.act(obs, critic_obs, infos, hist_encoding)
-                    obs, privileged_obs, rewards, dones, infos = self.env.step(actions)  # obs has changed to next_obs !! if done obs has been reset
+                    
+                    obs, privileged_obs, rewards, dones, infos = self.env.step(actions)
                     critic_obs = privileged_obs if privileged_obs is not None else obs
                     obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
+                    
+                    # 🔥 更新 infos["depth"] 为最新帧
+                    if self.if_depth:
+                        depth_buffer = self.env.depth_buffer.clone().to(self.device)
+                        if depth_buffer.dim() == 5:
+                            depth_buffer = depth_buffer.squeeze(1)
+                        infos["depth"] = depth_buffer[:, -1]
+                    
                     total_rew = self.alg.process_env_step(rewards, dones, infos)
                     
                     if self.log_dir is not None:
@@ -199,6 +257,10 @@ class OnPolicyRunner:
             if hist_encoding:
                 print("Updating dagger...")
                 mean_hist_latent_loss = self.alg.update_dagger()
+
+            # 🔥 如果使用深度编码器,需要 detach 隐藏状态
+            if self.if_depth:
+                self.alg.actor_critic.actor.depth_encoder.detach_hidden_states()
             
             stop = time.time()
             learn_time = stop - start
@@ -412,10 +474,12 @@ class OnPolicyRunner:
                 value = torch.mean(infotensor)
                 wandb_dict['Episode_rew/' + key] = value
                 ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
+        
         mean_std = self.alg.actor_critic.std.mean()
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs['collection_time'] + locs['learn_time']))
 
-        wandb_dict['Loss/value_function'] = ['mean_value_loss']
+        # PPO Loss
+        wandb_dict['Loss/value_function'] = locs['mean_value_loss']
         wandb_dict['Loss/surrogate'] = locs['mean_surrogate_loss']
         wandb_dict['Loss/estimator'] = locs['mean_estimator_loss']
         wandb_dict['Loss/hist_latent_loss'] = locs['mean_hist_latent_loss']
@@ -426,51 +490,80 @@ class OnPolicyRunner:
         wandb_dict['Loss/discriminator'] = locs['mean_disc_loss']
         wandb_dict['Loss/discriminator_accuracy'] = locs['mean_disc_acc']
 
+        # 🔥 新增: Depth encoder 相关信息
+        if self.if_depth:
+            # 记录 depth encoder 的梯度范数
+            depth_encoder_grad_norm = 0.0
+            for p in self.alg.actor_critic.actor.depth_encoder.parameters():
+                if p.grad is not None:
+                    depth_encoder_grad_norm += p.grad.data.norm(2).item() ** 2
+            depth_encoder_grad_norm = depth_encoder_grad_norm ** 0.5
+            wandb_dict['Depth/encoder_grad_norm'] = depth_encoder_grad_norm
+            
+            # 记录 depth encoder 参数范数
+            depth_encoder_param_norm = sum(p.data.norm(2).item() ** 2 
+                                        for p in self.alg.actor_critic.actor.depth_encoder.parameters()) ** 0.5
+            wandb_dict['Depth/encoder_param_norm'] = depth_encoder_param_norm
+            
+            # 如果是 recurrent depth encoder,记录隐藏状态统计
+            if hasattr(self.alg.actor_critic.actor.depth_encoder, 'hidden_states'):
+                hidden_states = self.alg.actor_critic.actor.depth_encoder.hidden_states
+                if hidden_states is not None and len(hidden_states) > 0:
+                    hidden_mean = torch.stack([h.mean() for h in hidden_states if h is not None]).mean().item()
+                    hidden_std = torch.stack([h.std() for h in hidden_states if h is not None]).mean().item()
+                    wandb_dict['Depth/hidden_state_mean'] = hidden_mean
+                    wandb_dict['Depth/hidden_state_std'] = hidden_std
+
+        # Policy
         wandb_dict['Policy/mean_noise_std'] = mean_std.item()
         wandb_dict['Perf/total_fps'] = fps
         wandb_dict['Perf/collection time'] = locs['collection_time']
         wandb_dict['Perf/learning_time'] = locs['learn_time']
+        
         if len(locs['rewbuffer']) > 0:
             wandb_dict['Train/mean_reward'] = statistics.mean(locs['rewbuffer'])
             wandb_dict['Train/mean_reward_explr'] = statistics.mean(locs['rew_explr_buffer'])
             wandb_dict['Train/mean_reward_task'] = wandb_dict['Train/mean_reward'] - wandb_dict['Train/mean_reward_explr']
             wandb_dict['Train/mean_reward_entropy'] = statistics.mean(locs['rew_entropy_buffer'])
             wandb_dict['Train/mean_episode_length'] = statistics.mean(locs['lenbuffer'])
-            # wandb_dict['Train/mean_reward/time', statistics.mean(locs['rewbuffer']), self.tot_time)
-            # wandb_dict['Train/mean_episode_length/time', statistics.mean(locs['lenbuffer']), self.tot_time)
 
         wandb.log(wandb_dict, step=locs['it'])
 
         str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
 
         if len(locs['rewbuffer']) > 0:
+            # 🔥 修改日志字符串,添加 depth 信息
             log_string = (f"""{'#' * width}\n"""
-                          f"""{str.center(width, ' ')}\n\n"""
-                          f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs[
+                        f"""{str.center(width, ' ')}\n\n"""
+                        f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs[
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
-                          f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
-                          f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
-                          f"""{'Discriminator loss:':>{pad}} {locs['mean_disc_loss']:.4f}\n"""
-                          f"""{'Discriminator accuracy:':>{pad}} {locs['mean_disc_acc']:.4f}\n"""
-                          f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
-                          f"""{'Mean reward (total):':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
-                          f"""{'Mean reward (task):':>{pad}} {statistics.mean(locs['rewbuffer']) - statistics.mean(locs['rew_explr_buffer']):.2f}\n"""
-                          f"""{'Mean reward (exploration):':>{pad}} {statistics.mean(locs['rew_explr_buffer']):.2f}\n"""
-                          f"""{'Mean reward (entropy):':>{pad}} {statistics.mean(locs['rew_entropy_buffer']):.2f}\n"""
-                          f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n""")
-                        #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
-                        #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
+                        f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
+                        f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
+                        f"""{'Discriminator loss:':>{pad}} {locs['mean_disc_loss']:.4f}\n"""
+                        f"""{'Discriminator accuracy:':>{pad}} {locs['mean_disc_acc']:.4f}\n"""
+                        f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
+                        f"""{'Mean reward (total):':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
+                        f"""{'Mean reward (task):':>{pad}} {statistics.mean(locs['rewbuffer']) - statistics.mean(locs['rew_explr_buffer']):.2f}\n"""
+                        f"""{'Mean reward (exploration):':>{pad}} {statistics.mean(locs['rew_explr_buffer']):.2f}\n"""
+                        f"""{'Mean reward (entropy):':>{pad}} {statistics.mean(locs['rew_entropy_buffer']):.2f}\n"""
+                        f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n""")
+            
+            # 🔥 如果使用深度编码器,添加 depth 相关日志
+            if self.if_depth:
+                log_string += (f"""{'Depth encoder grad norm:':>{pad}} {depth_encoder_grad_norm:.4f}\n"""
+                            f"""{'Depth encoder param norm:':>{pad}} {depth_encoder_param_norm:.4f}\n""")
+                if 'Depth/hidden_state_mean' in wandb_dict:
+                    log_string += (f"""{'Depth hidden state mean:':>{pad}} {wandb_dict['Depth/hidden_state_mean']:.4f}\n"""
+                                f"""{'Depth hidden state std:':>{pad}} {wandb_dict['Depth/hidden_state_std']:.4f}\n""")
         else:
             log_string = (f"""{'#' * width}\n"""
-                          f"""{str.center(width, ' ')}\n\n"""
-                          f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs[
+                        f"""{str.center(width, ' ')}\n\n"""
+                        f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs[
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
-                          f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
-                          f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
-                          f"""{'Estimator loss:':>{pad}} {locs['mean_estimator_loss']:.4f}\n"""
-                          f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n""")
-                        #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
-                        #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
+                        f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
+                        f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
+                        f"""{'Estimator loss:':>{pad}} {locs['mean_estimator_loss']:.4f}\n"""
+                        f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n""")
 
         log_string += f"""{'-' * width}\n"""
         log_string += ep_string
@@ -479,10 +572,10 @@ class OnPolicyRunner:
         mins = eta // 60
         secs = eta % 60
         log_string += (f"""{'-' * width}\n"""
-                       f"""{'Total timesteps:':>{pad}} {self.tot_timesteps}\n"""
-                       f"""{'Iteration time:':>{pad}} {iteration_time:.2f}s\n"""
-                       f"""{'Total time:':>{pad}} {self.tot_time:.2f}s\n"""
-                       f"""{'ETA:':>{pad}} {mins:.0f} mins {secs:.1f} s\n""")
+                    f"""{'Total timesteps:':>{pad}} {self.tot_timesteps}\n"""
+                    f"""{'Iteration time:':>{pad}} {iteration_time:.2f}s\n"""
+                    f"""{'Total time:':>{pad}} {self.tot_time:.2f}s\n"""
+                    f"""{'ETA:':>{pad}} {mins:.0f} mins {secs:.1f} s\n""")
         print(log_string)
 
     def save(self, path, infos=None):
@@ -493,9 +586,9 @@ class OnPolicyRunner:
             'iter': self.current_learning_iteration,
             'infos': infos,
             }
-        if self.if_depth:
-            state_dict['depth_encoder_state_dict'] = self.alg.depth_encoder.state_dict()
-            state_dict['depth_actor_state_dict'] = self.alg.depth_actor.state_dict()
+        # if self.if_depth:
+        #     state_dict['depth_encoder_state_dict'] = self.alg.depth_encoder.state_dict()
+        #     state_dict['depth_actor_state_dict'] = self.alg.depth_actor.state_dict()
         torch.save(state_dict, path)
 
     def load(self, path, load_optimizer=True):

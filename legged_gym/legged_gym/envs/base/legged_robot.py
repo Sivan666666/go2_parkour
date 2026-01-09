@@ -962,7 +962,7 @@ class LeggedRobot(BaseTask):
 
             self.depth_buffer[update_env_ids] = torch.cat([prev_depth, new_depth], dim=1)
 
-
+        print("Updated depth buffer for all environments.")
         self.gym.end_access_image_tensors(self.sim)
 
     def _update_goals(self):
@@ -1041,23 +1041,23 @@ class LeggedRobot(BaseTask):
                 self._draw_height_samples()
                 self._draw_goals()
                 self._draw_feet()
-            if self.cfg.depth.use_camera:
-                window_name = "Depth Image"
-                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        if self.cfg.depth.use_camera:
+            window_name = "Depth Image"
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-                scale_factor = 10
-                depth_image = self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5
-                height, width = depth_image.shape[:2]
-                new_height = int(56 * scale_factor)
-                new_width = int(87 * scale_factor)
-                print(new_height, new_width)
+            scale_factor = 10
+            depth_image = self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5
+            height, width = depth_image.shape[:2]
+            new_height = int(56 * scale_factor)
+            new_width = int(87 * scale_factor)
+            print(new_height, new_width)
 
-                resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+            resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
 
-                cv2.resizeWindow(window_name, new_width, new_height)
-                cv2.imshow(window_name, resized_depth_image)
-                # cv2.imshow("Depth Image", self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5)
-                cv2.waitKey(1)
+            cv2.resizeWindow(window_name, new_width, new_height)
+            cv2.imshow(window_name, resized_depth_image)
+            # cv2.imshow("Depth Image", self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5)
+            cv2.waitKey(1)
 
     def reindex_feet(self, vec):
         return vec[:, [1, 0, 3, 2]]

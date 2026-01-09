@@ -87,7 +87,7 @@ class LeggedRobotCfg(BaseConfig):
         num_future_goal_obs = 2
 
     class depth:
-        use_camera = False
+        use_camera = True
         camera_num_envs = 192
         camera_terrain_num_rows = 10
         camera_terrain_num_cols = 40
@@ -216,7 +216,7 @@ class LeggedRobotCfg(BaseConfig):
                         "normal stairs down": 0.0,
                         "normal stairs up": 0.,
                         "steep hollow stairs down": 0.0,
-                        "steep hollow stairs up": 0.5,
+                        "steep hollow stairs up": 0.,
                         "discrete": 0., 
                         "stepping stones": 0.0,
                         "gaps": 0., 
@@ -225,7 +225,7 @@ class LeggedRobotCfg(BaseConfig):
                         "wall": 0.0,
                         "platform": 0.,
                         "hollow stairs down": 0., 
-                        "hollow stairs up": 0.5,
+                        "hollow stairs up": 0.,
                         "parkour": 0.0,         # 0.2
                         "parkour_hurdle": 0.,  # 0.2
                         "parkour_flat": 0.0,
@@ -438,7 +438,7 @@ class LeggedRobotCfgPPO(BaseConfig):
         buffer_len = LeggedRobotCfg.depth.buffer_len
         hidden_dims = 512
         learning_rate = 1.e-3
-        num_steps_per_env = LeggedRobotCfg.depth.update_interval * 24
+        num_steps_per_env = 24
 
     class estimator:
         train_with_estimated_states = True
