@@ -114,6 +114,7 @@ class OnPolicyRunner:
         self.alg: PPO = alg_class(actor_critic, 
                                 estimator, self.estimator_cfg, 
                                 None, None, None,  # 不再传递 depth_encoder
+                                vae_beta=1,
                                 device=self.device, **self.alg_cfg)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
@@ -253,7 +254,10 @@ class OnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
             
-            mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_disc_loss, mean_disc_acc, mean_priv_reg_loss, priv_reg_coef = self.alg.update()
+            # 🔥 解包添加 VAE 相关返回值
+            mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_disc_loss, mean_disc_acc, \
+            mean_priv_reg_loss, priv_reg_coef, mean_vae_loss, mean_recon_loss, mean_kl_loss = self.alg.update()
+        
             if hist_encoding:
                 print("Updating dagger...")
                 mean_hist_latent_loss = self.alg.update_dagger()
@@ -490,6 +494,11 @@ class OnPolicyRunner:
         wandb_dict['Loss/discriminator'] = locs['mean_disc_loss']
         wandb_dict['Loss/discriminator_accuracy'] = locs['mean_disc_acc']
 
+        # 🔥 添加 VAE Loss 记录
+        if self.if_depth:
+            wandb_dict['Loss_VAE/total'] = locs.get('mean_vae_loss', 0)
+            wandb_dict['Loss_VAE/reconstruction'] = locs.get('mean_recon_loss', 0)
+            wandb_dict['Loss_VAE/kl_divergence'] = locs.get('mean_kl_loss', 0)
         # 🔥 新增: Depth encoder 相关信息
         if self.if_depth:
             # 记录 depth encoder 的梯度范数
@@ -555,6 +564,11 @@ class OnPolicyRunner:
                 if 'Depth/hidden_state_mean' in wandb_dict:
                     log_string += (f"""{'Depth hidden state mean:':>{pad}} {wandb_dict['Depth/hidden_state_mean']:.4f}\n"""
                                 f"""{'Depth hidden state std:':>{pad}} {wandb_dict['Depth/hidden_state_std']:.4f}\n""")
+            # 打印日志添加 VAE 信息
+            if self.if_depth and len(locs['rewbuffer']) > 0:
+                log_string += (f"""{'VAE total loss:':>{pad}} {locs.get('mean_vae_loss', 0):.4f}\n"""
+                            f"""{'VAE recon loss:':>{pad}} {locs.get('mean_recon_loss', 0):.4f}\n"""
+                            f"""{'VAE KL loss:':>{pad}} {locs.get('mean_kl_loss', 0):.4f}\n""")
         else:
             log_string = (f"""{'#' * width}\n"""
                         f"""{str.center(width, ' ')}\n\n"""
@@ -592,28 +606,70 @@ class OnPolicyRunner:
         torch.save(state_dict, path)
 
     def load(self, path, load_optimizer=True):
-        print("*" * 80)
-        print("Loading model from {}...".format(path))
+        """ 
+        从检查点加载模型
+        Args:
+            path: 模型文件路径
+            load_optimizer: 是否加载优化器状态
+        """
+        import warnings
+        
         loaded_dict = torch.load(path, map_location=self.device)
+        
+        # 加载主要的 actor_critic
         self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
-        self.alg.estimator.load_state_dict(loaded_dict['estimator_state_dict'])
+        
+        # 加载 estimator
+        if 'estimator_state_dict' in loaded_dict:
+            self.alg.estimator.load_state_dict(loaded_dict['estimator_state_dict'])
+        
+        # 🔥 修复: 检查 depth_encoder 是否集成在 actor 中
         if self.if_depth:
-            if 'depth_encoder_state_dict' not in loaded_dict:
-                warnings.warn("'depth_encoder_state_dict' key does not exist, not loading depth encoder...")
+            # 情况 1: 旧版本 - depth_encoder 和 depth_actor 是独立的
+            if 'depth_encoder_state_dict' in loaded_dict:
+                warnings.warn("Loading legacy model with separate depth_encoder...")
+                # 这种情况下需要单独的 depth_encoder 和 depth_actor
+                if hasattr(self.alg, 'depth_encoder'):
+                    self.alg.depth_encoder.load_state_dict(loaded_dict['depth_encoder_state_dict'])
+                if hasattr(self.alg, 'depth_actor'):
+                    if 'depth_actor_state_dict' in loaded_dict:
+                        self.alg.depth_actor.load_state_dict(loaded_dict['depth_actor_state_dict'])
+                    else:
+                        warnings.warn("No saved depth_actor, copying from actor_critic.actor...")
+                        self.alg.depth_actor.load_state_dict(self.alg.actor_critic.actor.state_dict())
+            
+            # 情况 2: 新版本 - depth_encoder 已集成在 actor 中
             else:
-                print("Saved depth encoder detected, loading...")
-                self.alg.depth_encoder.load_state_dict(loaded_dict['depth_encoder_state_dict'])
-            if 'depth_actor_state_dict' in loaded_dict:
-                print("Saved depth actor detected, loading...")
-                self.alg.depth_actor.load_state_dict(loaded_dict['depth_actor_state_dict'])
-            else:
-                print("No saved depth actor, Copying actor critic actor to depth actor...")
-                self.alg.depth_actor.load_state_dict(self.alg.actor_critic.actor.state_dict())
+                # 🔥 新版本不需要额外操作，depth_encoder 已经随 actor_critic 加载
+                print("✅ Depth encoder loaded as part of actor_critic (integrated version)")
+                
+                # 如果旧代码中有 depth_actor，给出提示
+                if hasattr(self.alg, 'depth_actor'):
+                    warnings.warn(
+                        "Model has integrated depth_encoder, but PPO still has 'depth_actor'. "
+                        "Consider removing depth_actor from PPO initialization."
+                    )
+        
+        # 加载优化器状态
         if load_optimizer:
-            self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
-        # self.current_learning_iteration = loaded_dict['iter']
-        print("*" * 80)
-        return loaded_dict['infos']
+            if 'optimizer_state_dict' in loaded_dict:
+                self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
+            if 'estimator_optimizer_state_dict' in loaded_dict:
+                self.alg.estimator_optimizer.load_state_dict(loaded_dict['estimator_optimizer_state_dict'])
+            
+            # 🔥 旧版本的优化器加载（如果存在）
+            if self.if_depth and hasattr(self.alg, 'depth_encoder_optimizer'):
+                if 'depth_encoder_optimizer_state_dict' in loaded_dict:
+                    self.alg.depth_encoder_optimizer.load_state_dict(loaded_dict['depth_encoder_optimizer_state_dict'])
+            
+            if self.if_depth and hasattr(self.alg, 'depth_actor_optimizer'):
+                if 'depth_actor_optimizer_state_dict' in loaded_dict:
+                    self.alg.depth_actor_optimizer.load_state_dict(loaded_dict['depth_actor_optimizer_state_dict'])
+        
+        print(f"✅ Model loaded from {path}")
+        
+        # 返回训练迭代次数（如果有）
+        return loaded_dict.get('iter', 0)
 
     def get_inference_policy(self, device=None):
         self.alg.actor_critic.eval() # switch to evaluation mode (dropout for example)

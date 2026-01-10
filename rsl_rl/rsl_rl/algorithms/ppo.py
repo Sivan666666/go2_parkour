@@ -65,6 +65,7 @@ class PPO:
                  depth_encoder,
                  depth_encoder_paras,
                  depth_actor,
+                 vae_beta=1, 
                  num_learning_epochs=1,
                  num_mini_batches=1,
                  clip_param=0.2,
@@ -89,6 +90,9 @@ class PPO:
         # 🔥 检查 actor_critic 是否有 depth_encoder
         self.if_depth = hasattr(actor_critic.actor, 'depth_encoder') and actor_critic.actor.depth_encoder is not None
 
+        self.vae_beta = vae_beta  # KL divergence 权重
+
+        print(f"✅ VAE enabled with beta={vae_beta}")
         
 
         self.desired_kl = desired_kl
@@ -153,21 +157,21 @@ class PPO:
         if self.actor_critic.is_recurrent:
             self.transition.hidden_states = self.actor_critic.get_hidden_states()
         
-        # 🔥 提取深度图
         depth_image = info.get("depth") if info else None
-        # 🔥 存储深度图供后续训练使用 
         self.transition.depth_images = depth_image.clone() if depth_image is not None else None
-    
         
-        # Compute the actions and values, use proprio to compute estimated priv_states then actions, but store true priv_states
-        if self.train_with_estimated_states: #True
+        # 🔥 训练时不返回 VAE 参数 (act 阶段只采样)
+        if self.train_with_estimated_states:
             obs_est = obs.clone()
             priv_states_estimated = self.estimator(obs_est[:, :self.num_prop])
             obs_est[:, self.num_prop+self.num_scan:self.num_prop+self.num_scan+self.priv_states_dim] = priv_states_estimated
-            self.transition.actions = self.actor_critic.act(obs_est, hist_encoding, depth_image=depth_image).detach()
+            self.transition.actions = self.actor_critic.act(
+                obs_est, hist_encoding, depth_image=depth_image, return_vae_params=False
+            ).detach()
         else:
-            self.transition.actions = self.actor_critic.act(obs, hist_encoding, depth_image=depth_image).detach()
-    
+            self.transition.actions = self.actor_critic.act(
+                obs, hist_encoding, depth_image=depth_image, return_vae_params=False
+            ).detach()
 
         self.transition.values = self.actor_critic.evaluate(critic_obs).detach()
         self.transition.actions_log_prob = self.actor_critic.get_actions_log_prob(self.transition.actions).detach()
@@ -203,159 +207,150 @@ class PPO:
         mean_value_loss = 0
         mean_surrogate_loss = 0
         mean_estimator_loss = 0
+        mean_vae_loss = 0  # 🔥 新增
+        mean_recon_loss = 0  # 🔥 新增
+        mean_kl_loss = 0  # 🔥 新增
         mean_discriminator_loss = 0
         mean_discriminator_acc = 0
         mean_priv_reg_loss = 0
+        
         if self.actor_critic.is_recurrent:
             generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
-        # 🔥 修改解包,添加 depth_images_batch
-        for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
-            old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch, depth_images_batch in generator:
+        
+        for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, \
+            old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch, depth_images_batch in generator:
 
-                print(f"🔥 Debug Info - Beginning of mini-batch processing:")
-                print(f"🔥 Debug Info - Depth Encoder Exists: {self.if_depth}")
-                # 🔥 调试 1: 检查 depth_images_batch
-                if self.if_depth:
-                    print("=" * 80)
-                    print("🔥 调试信息 - Batch 1:")
-                    print(f"   depth_images_batch is None: {depth_images_batch is None}")
-                    if depth_images_batch is not None:
-                        print(f"   depth_images_batch.shape: {depth_images_batch.shape}")
-                        print(f"   depth_images_batch.device: {depth_images_batch.device}")
-                        print(f"   depth_images_batch.requires_grad: {depth_images_batch.requires_grad}")
-                        print(f"   depth_images_batch.dtype: {depth_images_batch.dtype}")
-                        print(f"   depth_images_batch.min(): {depth_images_batch.min().item():.4f}")
-                        print(f"   depth_images_batch.max(): {depth_images_batch.max().item():.4f}")
-                        print(f"   depth_images_batch.mean(): {depth_images_batch.mean().item():.4f}")
-                    print("=" * 80)
+            # 🔥 训练模式: 返回 VAE 参数
+            self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0], 
+                                 depth_image=depth_images_batch, return_vae_params=True)
 
-                # 🔥 调试 2: 在 act 之前检查 depth_encoder 参数
-                if self.if_depth:
-                    print("🔥 调试信息 - Depth Encoder 参数 (before act):")
-                    for name, param in self.actor_critic.actor.depth_encoder.named_parameters():
-                        print(f"   {name}: requires_grad={param.requires_grad}, grad={param.grad is not None}")
-                        if param.grad is not None:
-                            print(f"      grad_norm={param.grad.norm().item():.6f}")
+            actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
+            value_batch = self.actor_critic.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
+            mu_batch = self.actor_critic.action_mean
+            sigma_batch = self.actor_critic.action_std
+            entropy_batch = self.actor_critic.entropy
+            
+            # ...existing PPO losses...
+            priv_latent_batch = self.actor_critic.actor.infer_priv_latent(obs_batch)
+            with torch.inference_mode():
+                hist_latent_batch = self.actor_critic.actor.infer_hist_latent(obs_batch)
+            priv_reg_loss = (priv_latent_batch - hist_latent_batch.detach()).norm(p=2, dim=1).mean()
+            priv_reg_stage = min(max((self.counter - self.priv_reg_coef_schedual[2]), 0) / self.priv_reg_coef_schedual[3], 1)
+            priv_reg_coef = priv_reg_stage * (self.priv_reg_coef_schedual[1] - self.priv_reg_coef_schedual[0]) + self.priv_reg_coef_schedual[0]
 
-
-                # 🔥 直接调用 actor_critic.act,传入 depth_images_batch
-                # actor 内部会自动使用 depth_encoder 计算 depth_latent
-                self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0], depth_image=depth_images_batch)
-
-                # 🔥 调试 3: 检查 act 之后的计算图
-                if self.if_depth:
-                    print("🔥 调试信息 - After act():")
-                    print(f"   action_mean.requires_grad: {self.actor_critic.action_mean.requires_grad}")
-                    print(f"   action_mean.grad_fn: {self.actor_critic.action_mean.grad_fn}")
-
-
-                actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
-                value_batch = self.actor_critic.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
-                mu_batch = self.actor_critic.action_mean
-                sigma_batch = self.actor_critic.action_std
-                entropy_batch = self.actor_critic.entropy
+            # Estimator
+            priv_states_predicted = self.estimator(obs_batch[:, :self.num_prop])
+            estimator_loss = (priv_states_predicted - obs_batch[:, self.num_prop+self.num_scan:self.num_prop+self.num_scan+self.priv_states_dim]).pow(2).mean()
+            self.estimator_optimizer.zero_grad()
+            estimator_loss.backward()
+            nn.utils.clip_grad_norm_(self.estimator.parameters(), self.max_grad_norm)
+            self.estimator_optimizer.step()
+            
+            # 🔥 VAE Loss
+            vae_loss = torch.tensor(0.0, device=self.device)
+            recon_loss = torch.tensor(0.0, device=self.device)
+            kl_loss = torch.tensor(0.0, device=self.device)
+            
+            if self.if_depth and depth_images_batch is not None:
+                # 获取 VAE 参数
+                vae_mean = self.actor_critic.vae_mean  # [batch, 32]
+                vae_logvar = self.actor_critic.vae_logvar  # [batch, 32]
                 
-                # Adaptation module update
-                priv_latent_batch = self.actor_critic.actor.infer_priv_latent(obs_batch)
+                # 解码 latent
+                reconstructed_scandots_latent = self.actor_critic.actor.depth_decoder(vae_mean)  # [batch, num_scan]
+                # print("reconstructed_scandots_latent.shape:", reconstructed_scandots_latent.shape)
+                # print("self.num_scan:", self.num_scan)
+                # 获取真实 scandots latent (通过 scan_encoder 编码原始 scandots)
+                true_scandots = obs_batch[:, self.num_prop:self.num_prop + self.num_scan]
+                # true_scandots_latent = self.actor_critic.actor.scan_encoder(true_scandots)  # [batch, scan_encoder_output_dim]
+                
+                # 重建损失 (MSE)
+                recon_loss = nn.MSELoss()(reconstructed_scandots_latent, true_scandots.detach())
+                
+                # KL 散度损失
+                kl_loss = -0.5 * torch.sum(1 + vae_logvar - vae_mean.pow(2) - vae_logvar.exp(), dim=1).mean()
+                
+                # 总 VAE 损失
+                vae_loss = recon_loss + self.vae_beta * kl_loss
+
+            # KL (for PPO)
+            if self.desired_kl != None and self.schedule == 'adaptive':
                 with torch.inference_mode():
-                    hist_latent_batch = self.actor_critic.actor.infer_hist_latent(obs_batch)
-                priv_reg_loss = (priv_latent_batch - hist_latent_batch.detach()).norm(p=2, dim=1).mean()
-                priv_reg_stage = min(max((self.counter - self.priv_reg_coef_schedual[2]), 0) / self.priv_reg_coef_schedual[3], 1)
-                priv_reg_coef = priv_reg_stage * (self.priv_reg_coef_schedual[1] - self.priv_reg_coef_schedual[0]) + self.priv_reg_coef_schedual[0]
+                    kl = torch.sum(
+                        torch.log(sigma_batch / old_sigma_batch + 1.e-5) + 
+                        (torch.square(old_sigma_batch) + torch.square(old_mu_batch - mu_batch)) / 
+                        (2.0 * torch.square(sigma_batch)) - 0.5, axis=-1)
+                    kl_mean = torch.mean(kl)
 
-                # Estimator
-                priv_states_predicted = self.estimator(obs_batch[:, :self.num_prop])  # obs in batch is with true priv_states
-                estimator_loss = (priv_states_predicted - obs_batch[:, self.num_prop+self.num_scan:self.num_prop+self.num_scan+self.priv_states_dim]).pow(2).mean()
-                self.estimator_optimizer.zero_grad()
-                estimator_loss.backward()
-                nn.utils.clip_grad_norm_(self.estimator.parameters(), self.max_grad_norm)
-                self.estimator_optimizer.step()
-                
-                # KL
-                if self.desired_kl != None and self.schedule == 'adaptive':
-                    with torch.inference_mode():
-                        kl = torch.sum(
-                            torch.log(sigma_batch / old_sigma_batch + 1.e-5) + (torch.square(old_sigma_batch) + torch.square(old_mu_batch - mu_batch)) / (2.0 * torch.square(sigma_batch)) - 0.5, axis=-1)
-                        kl_mean = torch.mean(kl)
-
-                        if kl_mean > self.desired_kl * 2.0:
-                            self.learning_rate = max(1e-5, self.learning_rate / 1.5)
-                        elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
-                            self.learning_rate = min(1e-2, self.learning_rate * 1.5)
-                        
-                        for param_group in self.optimizer.param_groups:
-                            param_group['lr'] = self.learning_rate
-
-
-                # Surrogate loss
-                ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
-                surrogate = -torch.squeeze(advantages_batch) * ratio
-                surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(ratio, 1.0 - self.clip_param,
-                                                                                1.0 + self.clip_param)
-                surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
-
-                # Value function loss
-                if self.use_clipped_value_loss:
-                    value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(-self.clip_param,
-                                                                                                    self.clip_param)
-                    value_losses = (value_batch - returns_batch).pow(2)
-                    value_losses_clipped = (value_clipped - returns_batch).pow(2)
-                    value_loss = torch.max(value_losses, value_losses_clipped).mean()
-                else:
-                    value_loss = (returns_batch - value_batch).pow(2).mean()
-
-                loss = surrogate_loss + \
-                       self.value_loss_coef * value_loss - \
-                       self.entropy_coef * entropy_batch.mean() + \
-                       priv_reg_coef * priv_reg_loss
-                # loss = self.teacher_alpha * imitation_loss + (1 - self.teacher_alpha) * loss
-
-                # Gradient step
-                self.optimizer.zero_grad()
-                loss.backward()
-
-                        # 🔥 调试 7: backward 之后检查梯度
-                if self.if_depth:
-                    print("🔥 调试信息 - After backward():")
-                    has_grad = False
-                    for name, param in self.actor_critic.actor.depth_encoder.named_parameters():
-                        if param.grad is not None:
-                            grad_norm = param.grad.norm().item()
-                            print(f"   ✅ {name}: grad_norm={grad_norm:.6f}")
-                            has_grad = True
-                        else:
-                            print(f"   ❌ {name}: grad is None!")
+                    if kl_mean > self.desired_kl * 2.0:
+                        self.learning_rate = max(1e-5, self.learning_rate / 1.5)
+                    elif kl_mean < self.desired_kl / 2.0 and kl_mean > 0.0:
+                        self.learning_rate = min(1e-2, self.learning_rate * 1.5)
                     
-                    if not has_grad:
-                        print("   ⚠️  WARNING: 没有任何 depth_encoder 参数有梯度!")
-                        print("   可能原因:")
-                        print("   1. depth_image 没有参与 loss 计算")
-                        print("   2. depth_image 被 detach 了")
-                        print("   3. depth_encoder 的输出没有被使用")
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] = self.learning_rate
 
-                nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
-                self.optimizer.step()
+            # Surrogate loss
+            ratio = torch.exp(actions_log_prob_batch - torch.squeeze(old_actions_log_prob_batch))
+            surrogate = -torch.squeeze(advantages_batch) * ratio
+            surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(
+                ratio, 1.0 - self.clip_param, 1.0 + self.clip_param)
+            surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
 
-                mean_value_loss += value_loss.item()
-                mean_surrogate_loss += surrogate_loss.item()
-                mean_estimator_loss += estimator_loss.item()
-                mean_priv_reg_loss += priv_reg_loss.item()
-                mean_discriminator_loss += 0
-                mean_discriminator_acc += 0
+            # Value function loss
+            if self.use_clipped_value_loss:
+                value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(
+                    -self.clip_param, self.clip_param)
+                value_losses = (value_batch - returns_batch).pow(2)
+                value_losses_clipped = (value_clipped - returns_batch).pow(2)
+                value_loss = torch.max(value_losses, value_losses_clipped).mean()
+            else:
+                value_loss = (returns_batch - value_batch).pow(2).mean()
+
+            # 🔥 总损失 = PPO Loss + VAE Loss
+            loss = surrogate_loss + \
+                   self.value_loss_coef * value_loss - \
+                   self.entropy_coef * entropy_batch.mean() + \
+                   priv_reg_coef * priv_reg_loss + \
+                   vae_loss  # 🔥 添加 VAE loss
+
+            # Gradient step
+            self.optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+            self.optimizer.step()
+
+            mean_value_loss += value_loss.item()
+            mean_surrogate_loss += surrogate_loss.item()
+            mean_estimator_loss += estimator_loss.item()
+            mean_vae_loss += vae_loss.item()
+            mean_recon_loss += recon_loss.item()
+            mean_kl_loss += kl_loss.item()
+            mean_priv_reg_loss += priv_reg_loss.item()
+            mean_discriminator_loss += 0
+            mean_discriminator_acc += 0
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
         mean_surrogate_loss /= num_updates
         mean_estimator_loss /= num_updates
+        mean_vae_loss /= num_updates
+        mean_recon_loss /= num_updates
+        mean_kl_loss /= num_updates
         mean_priv_reg_loss /= num_updates
         mean_discriminator_loss /= num_updates
         mean_discriminator_acc /= num_updates
+        
         self.storage.clear()
         self.update_counter()
-        return mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_discriminator_loss, mean_discriminator_acc, mean_priv_reg_loss, priv_reg_coef
-
+        
+        # 🔥 返回值添加 VAE 相关指标
+        return mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_discriminator_loss, \
+               mean_discriminator_acc, mean_priv_reg_loss, priv_reg_coef, mean_vae_loss, mean_recon_loss, mean_kl_loss
+    
+    
     def update_dagger(self):
         mean_hist_latent_loss = 0
         if self.actor_critic.is_recurrent:

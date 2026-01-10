@@ -99,16 +99,16 @@ def play(args):
                                     "normal stairs down": 0.0,
                                     "normal stairs up": 0.,
                                     "steep hollow stairs down": 0.0,
-                                    "steep hollow stairs up": 0.5,
+                                    "steep hollow stairs up": 0.,
                                     "discrete": 0., 
                                     "stepping stones": 0.0,
                                     "gaps": 0., 
-                                    "flat": 0.,
+                                    "flat": 0.5,
                                     "pit": 0.0,
                                     "wall": 0.0,
                                     "platform": 0.,
                                     "hollow stairs down": 0.0, 
-                                    "hollow stairs up": 0.5,
+                                    "hollow stairs up": 0.,
                                     "parkour": 0.0,         # 0.2
                                     "parkour_hurdle": 0.0,  # 0.2
                                     "parkour_flat": 0.,
@@ -162,8 +162,12 @@ def play(args):
 
     # load policy
     train_cfg.runner.resume = True
-    ppo_runner, train_cfg, log_pth = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args, train_cfg=train_cfg, return_log_dir=True)
+    ppo_runner, train_cfg, log_pth = task_registry.make_alg_runner(
+        log_root=log_pth, env=env, name=args.task, args=args, 
+        train_cfg=train_cfg, return_log_dir=True
+    )
     
+    # 🔥 获取策略 (actor_critic.act_inference)
     if args.use_jit:
         path = os.path.join(log_pth, "traced")
         model, checkpoint = get_load_path(root=path, checkpoint=args.checkpoint)
@@ -171,12 +175,24 @@ def play(args):
         print("Loading jit for policy: ", path)
         policy_jit = torch.jit.load(path, map_location=env.device)
     else:
-        policy = ppo_runner.get_inference_policy(device=env.device)
+        # 🔥 直接获取 actor_critic (包含集成的 depth_encoder)
+        actor_critic = ppo_runner.get_actor_critic(device=env.device)
+        policy = actor_critic.act_inference
+    
     estimator = ppo_runner.get_estimator_inference_policy(device=env.device)
-    if env.cfg.depth.use_camera:
-        depth_encoder = ppo_runner.get_depth_encoder_inference_policy(device=env.device)
+
+    # 🔥 初始化 infos (与 learn_RL 一致)
+    infos = {}
+    if ppo_runner.if_depth:
+        depth_buffer = env.depth_buffer.clone().to(env.device)
+        if depth_buffer.dim() == 5:
+            depth_buffer = depth_buffer.squeeze(1)
+        infos["depth"] = depth_buffer[:, -1]  # 取最新帧
+    else:
+        infos["depth"] = None
 
     actions = torch.zeros(env.num_envs, 12, device=env.device, requires_grad=False)
+    
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
@@ -233,43 +249,43 @@ def play(args):
 
         with torch.no_grad():
             if args.use_jit:
+                # JIT 模式
                 if env.cfg.depth.use_camera:
                     if infos["depth"] is not None:
-                        depth_latent = torch.ones((env_cfg.env.num_envs, 32), device=env.device)
+                        depth_latent = torch.ones((env.num_envs, 32), device=env.device)
                         actions, depth_latent = policy_jit(obs.detach(), True, infos["depth"], depth_latent)
                     else:
-                        depth_buffer = torch.ones((env_cfg.env.num_envs, 58, 87), device=env.device)
+                        depth_buffer = torch.ones((env.num_envs, 58, 87), device=env.device)
                         actions, depth_latent = policy_jit(obs.detach(), False, depth_buffer, depth_latent)
                 else:
-                    obs_jit = torch.cat((obs.detach()[:, :env_cfg.env.n_proprio+env_cfg.env.n_priv], obs.detach()[:, -env_cfg.env.history_len*env_cfg.env.n_proprio:]), dim=1)
-                    actions = policy(obs_jit)
+                    obs_jit = torch.cat((obs.detach()[:, :env_cfg.env.n_proprio+env_cfg.env.n_priv], 
+                                        obs.detach()[:, -env_cfg.env.history_len*env_cfg.env.n_proprio:]), dim=1)
+                    actions = policy_jit(obs_jit)
             else:
+                # 🔥 新版本: 统一使用 policy (参考 learn_RL 中的 act 调用)
+                # policy 内部会自动处理 depth_image
+                # 注意: play 时使用 act_inference,不需要传 critic_obs
                 if env.cfg.depth.use_camera:
-                    if infos["depth"] is not None:
-                        obs_student = obs[:, :env.cfg.env.n_proprio].clone()
-                        obs_student[:, 6:8] = 0
-                        depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
-                        depth_latent = depth_latent_and_yaw[:, :-2]
-                        depth_yaw = depth_latent_and_yaw[:, -2:] * 1.5
-                    # 不使用 yaw 修正，保持原始观测
-                    # obs[:, 6:8] = 1.5*depth_yaw  # 注释掉这行
-                    # obs[:, 6:8] = -env.yaw.unsqueeze(1)   # [num_envs, 2] 两列都填 -yaw  # 强制设为0
-
-                    # look_id = env.lookat_id
-                    # print("env.yaw[look_id]:", env.yaw[look_id].item())
-                    # print("obs[look_id, 6:8]:", obs[look_id, 6:7].item())
-                    # obs[:, 6:8] = 0
-                
-                        
+                    # 方式 1: 手动传递 depth_image 参数 (推荐,与 learn_RL 一致)
+                    actions = actor_critic.act_inference(
+                        obs.detach(), 
+                        hist_encoding=True,
+                        depth_image=infos["depth"]  # 🔥 传递 depth_image
+                    )
                 else:
-                    depth_latent = None
-                # obs[:, 6:8] = 0  # 强制设为0
-                if hasattr(ppo_runner.alg, "depth_actor"):
-                    actions = ppo_runner.alg.depth_actor(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
-                else:
-                    actions = policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
-            
+                    actions = policy(obs.detach(), hist_encoding=True)
+        
+        # Step environment
         obs, _, rews, dones, infos = env.step(actions.detach())
+        
+        # 🔥 更新 infos["depth"] (与 learn_RL 一致)
+        if ppo_runner.if_depth:
+            depth_buffer = env.depth_buffer.clone().to(env.device)
+            if depth_buffer.dim() == 5:
+                depth_buffer = depth_buffer.squeeze(1)
+            infos["depth"] = depth_buffer[:, -1]
+        
+        
         if args.web:
             web_viewer.render(fetch_results=True,
                         step_graphics=True,

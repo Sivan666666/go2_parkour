@@ -148,6 +148,18 @@ class Actor(nn.Module):
             self.scan_encoder_output_dim = num_scan
         
         
+        # 🔥 添加 Depth Decoder (VAE 的 decoder)
+        if self.use_depth:
+            self.depth_decoder = nn.Sequential(
+                nn.Linear(32, 64),  # 32 是 depth_latent 维度
+                activation,
+                nn.Linear(64, 128),
+                activation,
+                nn.Linear(128, num_scan),  # 重建 scandots (132 维)
+                nn.Tanh()  # 与 scan_encoder 的输出激活一致
+            )
+            print(f"✅ Depth Decoder initialized: 32 -> {num_scan}")
+
         # print("num_prop", num_prop)
         # print("self.scan_encoder_output_dim", self.scan_encoder_output_dim)
         # print("num_priv_explicit", num_priv_explicit)
@@ -172,48 +184,47 @@ class Actor(nn.Module):
         self.actor_backbone = nn.Sequential(*actor_layers)
         print("self.actor_backbone shape:", self.actor_backbone)
 
-    def forward(self, obs, hist_encoding: bool, eval=False, scandots_latent=None, depth_image=None):
+    def forward(self, obs, hist_encoding: bool, eval=False, scandots_latent=None, 
+                depth_image=None, return_vae_params=False):
         """
         Args:
-            obs: 原始观测 [batch, obs_dim]
-            hist_encoding: 是否使用历史编码
-            eval: 是否评估模式
-            scandots_latent: 外部提供的 scandots latent (用于某些特殊情况)
-            depth_image: 深度图输入 [batch, 58, 87] (🔥 新增)
+            return_vae_params: 训练时设为 True,返回 VAE 参数
         """
-        # 🔥 如果提供了深度图,用 depth_encoder 计算 scandots_latent
+        vae_mean = None
+        vae_logvar = None
+        
         if self.use_depth and depth_image is not None:
             obs_prop_depth = obs[:, :self.num_prop].clone()
-            obs_prop_depth[:, 6:8] = 0  # 清零某些维度
+            obs_prop_depth[:, 6:8] = 0
             
-            # 通过 depth_encoder 计算 depth_latent
-            depth_latent_and_yaw = self.depth_encoder(depth_image, obs_prop_depth)
-            scandots_latent = depth_latent_and_yaw[:, :-2]  # 去掉 yaw 部分
+            if return_vae_params:
+                # 🔥 训练模式: 返回 VAE 参数
+                depth_latent_and_yaw, vae_mean, vae_logvar = self.depth_encoder(
+                    depth_image, obs_prop_depth, return_vae_params=True
+                )
+            else:
+                # 🔥 推理模式
+                depth_latent_and_yaw = self.depth_encoder(
+                    depth_image, obs_prop_depth, return_vae_params=False
+                )
             
-        # 如果没有提供 scandots_latent,则从 obs 中提取并编码
+            scandots_latent = depth_latent_and_yaw[:, :-2]
+            
         elif scandots_latent is None:
             scandots = obs[:, self.num_prop:self.num_prop + self.num_scan]
             scandots_latent = self.scan_encoder(scandots)
 
-            
-        
-        # 提取其他部分
-        priv_explicit = obs[:, self.num_prop + self.num_scan:self.num_prop + self.num_scan + self.num_priv_explicit]
+        priv_explicit = obs[:, self.num_prop + self.num_scan:
+                           self.num_prop + self.num_scan + self.num_priv_explicit]
         priv_latent = obs[:, self.num_prop + self.num_scan + self.num_priv_explicit:
                           self.num_prop + self.num_scan + self.num_priv_explicit + self.num_priv_latent]
         
-        # 拼接所有特征
-        backbone_input = torch.cat([obs[:, :self.num_prop], scandots_latent, priv_explicit, priv_latent], dim=1)
-
-        # print("self.num_scan", self.num_scan)
-        # print("scandots_latent shape:", scandots_latent.shape)
-        # print("priv_explicit shape:", priv_explicit.shape)
-        # print("priv_latent shape:", priv_latent.shape)
-        # print("backbone_input shape:", backbone_input.shape)
-        
-        # 🔥 修复: 使用 self.actor_backbone 而不是 self.actor
+        backbone_input = torch.cat([obs[:, :self.num_prop], scandots_latent, 
+                                   priv_explicit, priv_latent], dim=1)
         backbone_output = self.actor_backbone(backbone_input)
         
+        if return_vae_params:
+            return backbone_output, vae_mean, vae_logvar
         return backbone_output
     
     def infer_priv_latent(self, obs):
@@ -315,21 +326,31 @@ class ActorCriticRMA(nn.Module):
         mean = self.actor(observations, hist_encoding)
         self.distribution = Normal(mean, mean*0. + self.std)
 
-    def act(self, observations, hist_encoding=False, depth_image=None, **kwargs):
+    def act(self, observations, hist_encoding=False, depth_image=None, 
+            return_vae_params=False, **kwargs):
         """
         Args:
-            observations: 原始观测
-            hist_encoding: 是否使用历史编码
-            depth_image: 深度图 (🔥 新增)
+            return_vae_params: 训练时设为 True
         """
-        # print(depth_image)
-        # 🔥 调用 actor.forward,传入 depth_image
-        actions_mean = self.actor(observations, hist_encoding, depth_image=depth_image)
-
-        # 🔥 更新分布
-        self.distribution = Normal(actions_mean, actions_mean * 0. + self.std)
-
-        return self.distribution.sample()
+        if return_vae_params:
+            actions_mean, vae_mean, vae_logvar = self.actor(
+                observations, hist_encoding, 
+                depth_image=depth_image, 
+                return_vae_params=True
+            )
+            self.distribution = Normal(actions_mean, actions_mean * 0. + self.std)
+            # 🔥 缓存 VAE 参数供后续使用
+            self.vae_mean = vae_mean
+            self.vae_logvar = vae_logvar
+            return self.distribution.sample()
+        else:
+            actions_mean = self.actor(
+                observations, hist_encoding, 
+                depth_image=depth_image, 
+                return_vae_params=False
+            )
+            self.distribution = Normal(actions_mean, actions_mean * 0. + self.std)
+            return self.distribution.sample()
     
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)

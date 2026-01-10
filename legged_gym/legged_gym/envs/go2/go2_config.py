@@ -134,7 +134,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
         far_clip = 2
 
         # 噪声总开关
-        enable_noise = True
+        enable_noise = False
         dis_noise = 0.2
 
         # 1. Clip: 近距离设为无穷
@@ -204,9 +204,9 @@ class Go2RoughCfg( LeggedRobotCfg ):
             feet_stumble = -1
             feet_edge = -0.8
 
-            feet_air_time = 0.01
-            roll = -1.5
-            pitch = -0.05
+            # feet_air_time = 0.01
+            # roll = -1.5
+            # pitch = -0.05
             # foot_contact = 2e-5
             
             # 根据HIMLOCO新加的奖励函数

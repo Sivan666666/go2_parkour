@@ -799,51 +799,87 @@ class RecurrentDepthBackbone_Original(nn.Module):
         activation = nn.ELU()
         last_activation = nn.Tanh()
         self.base_backbone = base_backbone
+
         if env_cfg == None:
             self.combination_mlp = nn.Sequential(
-                                    nn.Linear(32 + 53, 128),
-                                    activation,
-                                    nn.Linear(128, 32)
-                                )
+                nn.Linear(32 + 53, 128),
+                activation,
+                nn.Linear(128, 32)
+            )
         else:
             self.combination_mlp = nn.Sequential(
-                                        nn.Linear(32 + env_cfg.env.n_proprio, 128),
-                                        activation,
-                                        nn.Linear(128, 32)
-                                    )
+                nn.Linear(32 + env_cfg.env.n_proprio, 128),
+                activation,
+                nn.Linear(128, 32)
+            )
+        
         self.rnn = nn.GRU(input_size=32, hidden_size=512, batch_first=True)
+        
+        # 🔥 VAE 改造: 输出 mean 和 logvar
         self.output_mlp = nn.Sequential(
-                                nn.Linear(512, 32+2),
-                                last_activation
-                            )
+            nn.Linear(512, 32+2),
+            last_activation
+        )
+        
+        # 🔥 VAE: 额外的分支用于输出 mean 和 logvar
+        self.mean_head = nn.Linear(512, 32)  # 只对 latent 部分计算 mean
+        self.logvar_head = nn.Linear(512, 32)  # 只对 latent 部分计算 logvar
+        
         self.hidden_states = None
 
-    def forward(self, depth_image, proprioception):
 
+    def forward(self, depth_image, proprioception, return_vae_params=False):
+        """
+        Args:
+            return_vae_params: 是否返回 VAE 参数 (训练时需要)
+        
+        Returns:
+            如果 return_vae_params=False: depth_latent_and_yaw [batch, 34]
+            如果 return_vae_params=True: (depth_latent_and_yaw, mean, logvar)
+        """
         batch_size = depth_image.shape[0]
         
-        # 🔥 修复: 动态调整隐藏状态 batch size
+        # 动态调整隐藏状态
         if self.hidden_states is None or self.hidden_states.size(1) != batch_size:
-            # 重新初始化隐藏状态以匹配当前 batch size
             self.hidden_states = torch.zeros(
-                1,  # num_layers
-                batch_size, 
-                512,  # hidden_size
+                1, batch_size, 512,
                 device=depth_image.device,
                 dtype=depth_image.dtype
             )
-
-        # 🔥 修复2: 使用 detached 的隐藏状态（断开计算图）
-        # 这样每次 forward 都是独立的计算图
+        
         hidden_input = self.hidden_states.detach()
-
+        
         depth_image = self.base_backbone(depth_image)
         depth_latent = self.combination_mlp(torch.cat((depth_image, proprioception), dim=-1))
-        # 🔥 使用 detached 的隐藏状态
         depth_latent, self.hidden_states = self.rnn(depth_latent[:, None, :], hidden_input)
-        depth_latent = self.output_mlp(depth_latent.squeeze(1))
         
-        return depth_latent
+        rnn_output = depth_latent.squeeze(1)  # [batch, 512]
+        
+        if return_vae_params:
+            # 🔥 训练模式: 返回 mean 和 logvar
+            mean = self.mean_head(rnn_output)  # [batch, 32]
+            logvar = self.logvar_head(rnn_output)  # [batch, 32]
+            
+            # Reparameterization trick
+            std = torch.exp(0.5 * logvar)
+            eps = torch.randn_like(std)
+            depth_latent_sampled = mean + eps * std  # [batch, 32]
+            
+            # 拼接 yaw (从原始 output_mlp 获取)
+            depth_latent_and_yaw_temp = self.output_mlp(rnn_output)  # [batch, 34]
+            yaw = depth_latent_and_yaw_temp[:, -2:]  # [batch, 2]
+            
+            # 最终输出: sampled latent + yaw
+            depth_latent_and_yaw = torch.cat([depth_latent_sampled, yaw], dim=-1)
+            
+            return depth_latent_and_yaw, mean, logvar
+        else:
+            # 🔥 推理模式: 直接使用 mean
+            mean = self.mean_head(rnn_output)
+            depth_latent_and_yaw_temp = self.output_mlp(rnn_output)
+            yaw = depth_latent_and_yaw_temp[:, -2:]
+            depth_latent_and_yaw = torch.cat([mean, yaw], dim=-1)
+            return depth_latent_and_yaw
 
     def detach_hidden_states(self):
         if self.hidden_states is not None:

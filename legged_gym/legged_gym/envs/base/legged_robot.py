@@ -911,6 +911,8 @@ class LeggedRobot(BaseTask):
         return depth_image[..., 2:-2, 15:-2]
 
     def update_depth_buffer(self):
+        import time
+        t0 = time.time()
         if not self.cfg.depth.use_camera:
             return
 
@@ -962,7 +964,9 @@ class LeggedRobot(BaseTask):
 
             self.depth_buffer[update_env_ids] = torch.cat([prev_depth, new_depth], dim=1)
 
-        print("Updated depth buffer for all environments.")
+        t1 = time.time()
+        print(f"Depth buffer update time: {(t1 - t0)*1000:.2f} ms")   
+        # print("Updated depth buffer for all environments.")
         self.gym.end_access_image_tensors(self.sim)
 
     def _update_goals(self):
@@ -1050,7 +1054,7 @@ class LeggedRobot(BaseTask):
             height, width = depth_image.shape[:2]
             new_height = int(56 * scale_factor)
             new_width = int(87 * scale_factor)
-            print(new_height, new_width)
+            # print(new_height, new_width)
 
             resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
 
