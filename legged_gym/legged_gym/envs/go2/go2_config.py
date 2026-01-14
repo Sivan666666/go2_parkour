@@ -124,7 +124,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         # 🔥 Horizontal FOV 域随机化
         horizontal_fov = 79  # 基准值
-        horizontal_fov_range = [77, 79, 81]
+        horizontal_fov_range = [77, 78, 79, 80, 81, 82, 87]
         # horizontal_fov_range = [86, 87, 88]   # 随机范围 86-88 度
 
         buffer_len = 2
@@ -135,13 +135,15 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         # 噪声总开关
         enable_noise = True
+
+        dis_noise_prob = 0.7
         dis_noise = 0.2
 
         # 1. Clip: 近距离设为无穷
         clip_near_distance = 0.15  # 0.15m以内设为无穷大
 
         # 2. Edge noise: 边缘噪声
-        edge_noise_enable_prob = 0.8  #  80%概率启用边缘噪声
+        edge_noise_enable_prob = 0.7  #  80%概率启用边缘噪声
         edge_noise_prob = 0.8  # 边缘处30%概率设为无穷
         edge_gradient_threshold = 0.2  # 深度梯度阈值(米)
         edge_dilation_kernel_size = 3  # 边缘膨胀核大小
@@ -172,8 +174,11 @@ class Go2RoughCfg( LeggedRobotCfg ):
         gaussian_blur_sigma = 1.0  # 标准差(越大越模糊)
 
         # 原有噪声
-        dropout_prob = 0.
-        salt_pepper_prob = 0.
+        dropout_prob = 0.02
+        salt_pepper_prob = 0.01
+
+        # Gaussian shift
+        gaussian_shift_std = 0.5
 
 
         scale = 1

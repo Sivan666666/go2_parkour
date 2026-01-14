@@ -57,6 +57,9 @@ import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
 
+from legged_gym.utils.noise_utils.depth_noise import DepthNoise
+from legged_gym.utils.noise_utils.depth_noise_baseline import DepthNoiseBaseline
+
 @torch.no_grad()
 def resize2d(img: torch.Tensor, size):
     # img: [N, C, H, W] 或 [C, H, W]，size: (out_h, out_w)
@@ -165,106 +168,14 @@ class PerlinNoise:
         """线性插值"""
         return a + t * (b - a)
 
-# class PerlinNoiseGPU:
-#     """GPU 加速的柏林噪声生成器 (向量化八度循环)"""
-#     def __init__(self, scale=10.0, octaves=2, device='cuda'):
-#         self.scale = scale
-#         self.octaves = octaves
-#         self.device = device
-        
-#         # 🔥 预计算所有八度的频率和振幅 (避免循环中重复计算)
-#         self.frequencies = torch.tensor(
-#             [2.0**i for i in range(octaves)],
-#             device=device,
-#             dtype=torch.float32
-#         )
-#         self.amplitudes = torch.tensor(
-#             [0.5**i for i in range(octaves)],
-#             device=device,
-#             dtype=torch.float32
-#         )
-        
-#     def generate(self, shape, time_offset=0.0):
-#         """生成2D柏林噪声 (批量处理所有八度)
-#         Args:
-#             shape: (height, width)
-#             time_offset: 时间偏移,用于生成连续的噪声
-#         Returns:
-#             noise: shape 的噪声图 Tensor,值范围[0, 1]
-#         """
-#         h, w = shape
-        
-#         # 🔥 批量生成所有八度的噪声 (替代 for 循环)
-#         # 为所有八度创建统一的坐标网格
-#         octave_noise = torch.zeros(self.octaves, h, w, device=self.device)
-        
-#         for octave in range(self.octaves):
-#             frequency = self.frequencies[octave]
-#             amplitude = self.amplitudes[octave]
-            
-#             # 生成梯度网格
-#             grid_h = int(h / self.scale / frequency) + 2
-#             grid_w = int(w / self.scale / frequency) + 2
-            
-#             # 使用时间偏移作为随机种子
-#             torch.manual_seed(int((time_offset + octave) * 1000) % 2**31)
-#             gradients = torch.randn(grid_h, grid_w, 2, device=self.device)
-            
-#             # 🔥 坐标网格 (复用同一份内存)
-#             y_grid = (torch.arange(h, device=self.device).float().unsqueeze(1) / self.scale / frequency).expand(h, w)
-#             x_grid = (torch.arange(w, device=self.device).float().unsqueeze(0) / self.scale / frequency).expand(h, w)
-            
-#             # 四个角点坐标
-#             x0 = torch.clamp(torch.floor(x_grid).long(), 0, grid_w - 1)
-#             y0 = torch.clamp(torch.floor(y_grid).long(), 0, grid_h - 1)
-#             x1 = torch.clamp(x0 + 1, 0, grid_w - 1)
-#             y1 = torch.clamp(y0 + 1, 0, grid_h - 1)
-            
-#             # 插值系数
-#             sx = x_grid - x0.float()
-#             sy = y_grid - y0.float()
-            
-#             # 🔥 梯度点积 (向量化,避免重复计算)
-#             # 预计算向量距离
-#             dx0 = sx
-#             dy0 = sy
-#             dx1 = sx - 1.0
-#             dy1 = sy - 1.0
-            
-#             # 四个角点的梯度
-#             g00 = gradients[y0, x0]  # [h, w, 2]
-#             g10 = gradients[y0, x1]
-#             g01 = gradients[y1, x0]
-#             g11 = gradients[y1, x1]
-            
-#             # 点积 (向量化)
-#             n00 = g00[..., 0] * dx0 + g00[..., 1] * dy0
-#             n10 = g10[..., 0] * dx1 + g10[..., 1] * dy0
-#             n01 = g01[..., 0] * dx0 + g01[..., 1] * dy1
-#             n11 = g11[..., 0] * dx1 + g11[..., 1] * dy1
-            
-#             # 双线性插值 (直接展开,避免函数调用)
-#             nx0 = n00 + sx * (n10 - n00)
-#             nx1 = n01 + sx * (n11 - n01)
-#             value = nx0 + sy * (nx1 - nx0)
-            
-#             octave_noise[octave] = value * amplitude
-        
-#         # 🔥 所有八度求和 (GPU 并行)
-#         noise = octave_noise.sum(dim=0)
-        
-#         # 归一化到 [0, 1]
-#         noise = (noise - noise.min()) / (noise.max() - noise.min() + 1e-8)
-#         return noise
-
 class PerlinNoiseGPU:
-    """GPU 加速的柏林噪声生成器 (带性能分析)"""
+    """GPU 加速的柏林噪声生成器 (向量化八度循环)"""
     def __init__(self, scale=10.0, octaves=2, device='cuda'):
         self.scale = scale
         self.octaves = octaves
         self.device = device
         
-        # 预计算所有八度的频率和振幅
+        # 🔥 预计算所有八度的频率和振幅 (避免循环中重复计算)
         self.frequencies = torch.tensor(
             [2.0**i for i in range(octaves)],
             device=device,
@@ -276,308 +187,78 @@ class PerlinNoiseGPU:
             dtype=torch.float32
         )
         
-        # 🔥 性能统计
-        self._timing_counter = 0
-        self._timing_accumulator = {}
-        
     def generate(self, shape, time_offset=0.0):
-        """生成2D柏林噪声 (带详细性能分析)"""
-        import time
-        
-        total_start = time.time()
-        timings = {}
-        
+        """生成2D柏林噪声 (批量处理所有八度)
+        Args:
+            shape: (height, width)
+            time_offset: 时间偏移,用于生成连续的噪声
+        Returns:
+            noise: shape 的噪声图 Tensor,值范围[0, 1]
+        """
         h, w = shape
+        
+        # 🔥 批量生成所有八度的噪声 (替代 for 循环)
+        # 为所有八度创建统一的坐标网格
         octave_noise = torch.zeros(self.octaves, h, w, device=self.device)
         
-        # 🔥 分八度统计
-        octave_timings = []
-        
         for octave in range(self.octaves):
-            octave_start = time.time()
-            octave_timing = {}
-            
             frequency = self.frequencies[octave]
             amplitude = self.amplitudes[octave]
             
-            # 1️⃣ 生成梯度网格
-            t0 = time.time()
+            # 生成梯度网格
             grid_h = int(h / self.scale / frequency) + 2
             grid_w = int(w / self.scale / frequency) + 2
+            
+            # 使用时间偏移作为随机种子
             torch.manual_seed(int((time_offset + octave) * 1000) % 2**31)
             gradients = torch.randn(grid_h, grid_w, 2, device=self.device)
-            octave_timing['1_gradient_gen'] = (time.time() - t0) * 1000
             
-            # 2️⃣ 生成坐标网格
-            t0 = time.time()
+            # 🔥 坐标网格 (复用同一份内存)
             y_grid = (torch.arange(h, device=self.device).float().unsqueeze(1) / self.scale / frequency).expand(h, w)
             x_grid = (torch.arange(w, device=self.device).float().unsqueeze(0) / self.scale / frequency).expand(h, w)
-            octave_timing['2_coord_grid'] = (time.time() - t0) * 1000
             
-            # 3️⃣ 计算四个角点坐标
-            t0 = time.time()
+            # 四个角点坐标
             x0 = torch.clamp(torch.floor(x_grid).long(), 0, grid_w - 1)
             y0 = torch.clamp(torch.floor(y_grid).long(), 0, grid_h - 1)
             x1 = torch.clamp(x0 + 1, 0, grid_w - 1)
             y1 = torch.clamp(y0 + 1, 0, grid_h - 1)
-            octave_timing['3_corner_coords'] = (time.time() - t0) * 1000
             
-            # 4️⃣ 计算插值系数
-            t0 = time.time()
+            # 插值系数
             sx = x_grid - x0.float()
             sy = y_grid - y0.float()
-            octave_timing['4_interp_coeff'] = (time.time() - t0) * 1000
             
-            # 5️⃣ 预计算向量距离
-            t0 = time.time()
+            # 🔥 梯度点积 (向量化,避免重复计算)
+            # 预计算向量距离
             dx0 = sx
             dy0 = sy
             dx1 = sx - 1.0
             dy1 = sy - 1.0
-            octave_timing['5_vector_dist'] = (time.time() - t0) * 1000
             
-            # 6️⃣ 获取四个角点的梯度
-            t0 = time.time()
-            g00 = gradients[y0, x0]
+            # 四个角点的梯度
+            g00 = gradients[y0, x0]  # [h, w, 2]
             g10 = gradients[y0, x1]
             g01 = gradients[y1, x0]
             g11 = gradients[y1, x1]
-            octave_timing['6_gradient_fetch'] = (time.time() - t0) * 1000
             
-            # 7️⃣ 梯度点积
-            t0 = time.time()
+            # 点积 (向量化)
             n00 = g00[..., 0] * dx0 + g00[..., 1] * dy0
             n10 = g10[..., 0] * dx1 + g10[..., 1] * dy0
             n01 = g01[..., 0] * dx0 + g01[..., 1] * dy1
             n11 = g11[..., 0] * dx1 + g11[..., 1] * dy1
-            octave_timing['7_dot_product'] = (time.time() - t0) * 1000
             
-            # 8️⃣ 双线性插值
-            t0 = time.time()
+            # 双线性插值 (直接展开,避免函数调用)
             nx0 = n00 + sx * (n10 - n00)
             nx1 = n01 + sx * (n11 - n01)
             value = nx0 + sy * (nx1 - nx0)
-            octave_timing['8_bilinear_interp'] = (time.time() - t0) * 1000
             
-            # 9️⃣ 乘以振幅并存储
-            t0 = time.time()
             octave_noise[octave] = value * amplitude
-            octave_timing['9_amplitude_scale'] = (time.time() - t0) * 1000
-            
-            octave_timing['OCTAVE_TOTAL'] = (time.time() - octave_start) * 1000
-            octave_timings.append(octave_timing)
         
-        # 🔟 所有八度求和
-        t0 = time.time()
+        # 🔥 所有八度求和 (GPU 并行)
         noise = octave_noise.sum(dim=0)
-        timings['10_octave_sum'] = (time.time() - t0) * 1000
         
-        # 1️⃣1️⃣ 归一化
-        t0 = time.time()
+        # 归一化到 [0, 1]
         noise = (noise - noise.min()) / (noise.max() - noise.min() + 1e-8)
-        timings['11_normalize'] = (time.time() - t0) * 1000
-        
-        timings['TOTAL'] = (time.time() - total_start) * 1000
-        
-        # 🔥 累积统计
-        self._accumulate_timings(timings, octave_timings)
-        self._timing_counter += 1
-        
-        # 每 100 次打印一次
-        if self._timing_counter % 100 == 0:
-            self._print_statistics()
-        
         return noise
-    
-    def _accumulate_timings(self, timings, octave_timings):
-        """累积时间统计"""
-        # 累积总体时间
-        for key, value in timings.items():
-            if key not in self._timing_accumulator:
-                self._timing_accumulator[key] = 0.0
-            self._timing_accumulator[key] += value
-        
-        # 累积每个八度的时间 (取平均)
-        for octave_idx, octave_timing in enumerate(octave_timings):
-            for key, value in octave_timing.items():
-                avg_key = f'octave_avg_{key}'
-                if avg_key not in self._timing_accumulator:
-                    self._timing_accumulator[avg_key] = 0.0
-                self._timing_accumulator[avg_key] += value / len(octave_timings)
-    
-    def _print_statistics(self):
-        """打印性能统计"""
-        print("\n" + "="*90)
-        print(f"🔥 柏林噪声生成器性能分析 (平均值, 基于 {self._timing_counter} 次调用)")
-        print("="*90)
-        
-        # 打印每个八度的平均耗时
-        print("\n📊 单个八度的详细耗时:")
-        print("-"*90)
-        
-        octave_keys = [
-            ('1_gradient_gen', '梯度网格生成'),
-            ('2_coord_grid', '坐标网格生成'),
-            ('3_corner_coords', '角点坐标计算'),
-            ('4_interp_coeff', '插值系数计算'),
-            ('5_vector_dist', '向量距离计算'),
-            ('6_gradient_fetch', '梯度索引获取'),
-            ('7_dot_product', '梯度点积计算'),
-            ('8_bilinear_interp', '双线性插值'),
-            ('9_amplitude_scale', '振幅缩放'),
-            ('OCTAVE_TOTAL', '✅ 单八度总计'),
-        ]
-        
-        octave_total = self._timing_accumulator.get('octave_avg_OCTAVE_TOTAL', 0) / self._timing_counter
-        
-        for key, desc in octave_keys:
-            avg_key = f'octave_avg_{key}'
-            if avg_key in self._timing_accumulator:
-                avg_time = self._timing_accumulator[avg_key] / self._timing_counter
-                if key == 'OCTAVE_TOTAL':
-                    print("-"*90)
-                    print(f"  {desc:.<50} {avg_time:>10.4f} ms")
-                else:
-                    percentage = (avg_time / octave_total * 100) if octave_total > 0 else 0
-                    print(f"  {desc:.<50} {avg_time:>10.4f} ms  ({percentage:>5.1f}%)")
-        
-        # 打印总体耗时
-        print("\n📊 总体耗时:")
-        print("-"*90)
-        
-        total_keys = [
-            ('10_octave_sum', '所有八度求和'),
-            ('11_normalize', '归一化处理'),
-            ('TOTAL', '⏱️  总计'),
-        ]
-        
-        total_time = self._timing_accumulator.get('TOTAL', 0) / self._timing_counter
-        
-        for key, desc in total_keys:
-            if key in self._timing_accumulator:
-                avg_time = self._timing_accumulator[key] / self._timing_counter
-                if key == 'TOTAL':
-                    print("-"*90)
-                    print(f"  {desc:.<50} {avg_time:>10.4f} ms")
-                else:
-                    percentage = (avg_time / total_time * 100) if total_time > 0 else 0
-                    print(f"  {desc:.<50} {avg_time:>10.4f} ms  ({percentage:>5.1f}%)")
-        
-        # 八度数统计
-        all_octaves_time = octave_total * self.octaves
-        octave_overhead = total_time - all_octaves_time
-        
-        print("\n📊 八度统计:")
-        print("-"*90)
-        print(f"  {'八度数量':.<50} {self.octaves:>10d}")
-        print(f"  {'单八度平均耗时':.<50} {octave_total:>10.4f} ms")
-        print(f"  {'所有八度总耗时':.<50} {all_octaves_time:>10.4f} ms  ({all_octaves_time/total_time*100:>5.1f}%)")
-        print(f"  {'其他开销(求和+归一化)':.<50} {octave_overhead:>10.4f} ms  ({octave_overhead/total_time*100:>5.1f}%)")
-        
-        print("="*90 + "\n")
-        
-        # 重置计数器
-        self._timing_counter = 0
-        self._timing_accumulator = {}
-    
-# class PerlinNoiseGPU:
-#     """GPU 加速的柏林噪声生成器"""
-#     def __init__(self, scale=10.0, octaves=2, device='cuda'):
-#         self.scale = scale
-#         self.octaves = octaves
-#         self.device = device
-        
-#     def generate(self, shape, time_offset=0.0):
-#         """生成2D柏林噪声 (全 GPU 实现)
-#         Args:
-#             shape: (height, width)
-#             time_offset: 时间偏移,用于生成连续的噪声
-#         Returns:
-#             noise: shape 的噪声图 Tensor,值范围[0, 1]
-#         """
-#         h, w = shape
-#         noise = torch.zeros((h, w), device=self.device)
-        
-#         # 使用多个八度叠加
-#         amplitude = 1.0
-#         frequency = 1.0
-        
-#         for octave in range(self.octaves):
-#             # 生成随机梯度网格
-#             grid_h = int(h / self.scale / frequency) + 2
-#             grid_w = int(w / self.scale / frequency) + 2
-            
-#             # 🔥 使用时间偏移作为随机种子 (在 GPU 上)
-#             torch.manual_seed(int((time_offset + octave) * 1000) % 2**31)
-#             gradients = torch.randn(grid_h, grid_w, 2, device=self.device)
-            
-#             # 🔥 创建网格坐标 (GPU 张量操作,替代双重循环)
-#             # 生成 (h, w) 的坐标网格
-#             y_coords = torch.arange(h, device=self.device).float().unsqueeze(1) / self.scale / frequency  # [h, 1]
-#             x_coords = torch.arange(w, device=self.device).float().unsqueeze(0) / self.scale / frequency  # [1, w]
-            
-#             # 广播到 (h, w)
-#             y_grid = y_coords.expand(h, w)  # [h, w]
-#             x_grid = x_coords.expand(h, w)  # [h, w]
-            
-#             # 四个角点的整数坐标
-#             x0 = torch.floor(x_grid).long()  # [h, w]
-#             y0 = torch.floor(y_grid).long()
-#             x1 = x0 + 1
-#             y1 = y0 + 1
-
-#             # Clip 坐标防止越界
-#             x0 = torch.clamp(x0, 0, grid_w - 1)
-#             y0 = torch.clamp(y0, 0, grid_h - 1)
-#             x1 = torch.clamp(x1, 0, grid_w - 1)
-#             y1 = torch.clamp(y1, 0, grid_h - 1)
-            
-#             # 🔥 计算四个角点的梯度点积 (向量化计算)
-#             # 相对坐标
-#             sx = x_grid - x0.float()  # [h, w]
-#             sy = y_grid - y0.float()
-            
-#             # 取四个角点的梯度 [h, w, 2]
-#             grad_00 = gradients[y0, x0]  # [h, w, 2]
-#             grad_10 = gradients[y0, x1]
-#             grad_01 = gradients[y1, x0]
-#             grad_11 = gradients[y1, x1]
-            
-#             # 计算到四个角点的向量
-#             vec_00 = torch.stack([x_grid - x0.float(), y_grid - y0.float()], dim=-1)  # [h, w, 2]
-#             vec_10 = torch.stack([x_grid - x1.float(), y_grid - y0.float()], dim=-1)
-#             vec_01 = torch.stack([x_grid - x0.float(), y_grid - y1.float()], dim=-1)
-#             vec_11 = torch.stack([x_grid - x1.float(), y_grid - y1.float()], dim=-1)
-            
-#             # 梯度点积 (向量化)
-#             n00 = (grad_00 * vec_00).sum(dim=-1)  # [h, w]
-#             n10 = (grad_10 * vec_10).sum(dim=-1)
-#             n01 = (grad_01 * vec_01).sum(dim=-1)
-#             n11 = (grad_11 * vec_11).sum(dim=-1)
-            
-#             # 🔥 双线性插值 (向量化)
-#             nx0 = self._lerp(n00, n10, sx)
-#             nx1 = self._lerp(n01, n11, sx)
-#             value = self._lerp(nx0, nx1, sy)
-            
-#             noise += value * amplitude
-#             amplitude *= 0.5
-#             frequency *= 2.0
-        
-#         # 归一化到 [0, 1]
-#         noise = (noise - noise.min()) / (noise.max() - noise.min() + 1e-8)
-#         return noise
-    
-#     def _lerp(self, a, b, t):
-#         """线性插值 (GPU 张量操作)
-#         Args:
-#             a: 起始值 tensor
-#             b: 终止值 tensor
-#             t: 插值系数 tensor [0, 1]
-#         Returns:
-#             插值结果 tensor
-#         """
-#         return a + t * (b - a)
 
 class LeggedRobot(BaseTask):
     def __init__(self, cfg: LeggedRobotCfg, sim_params, physics_engine, sim_device, headless):
@@ -606,6 +287,32 @@ class LeggedRobot(BaseTask):
         # 🔥 初始化柏林噪声生成器 (GPU 版本)
         
         if self.cfg.depth.use_camera:
+
+            self.depth_model = DepthNoise(focal_length=28.0,
+                             baseline=0.12, 
+                             min_depth=0.15,
+                             max_depth=2)
+            
+            # self.depth_model = DepthNoiseBaseline(focal_length=28.0,
+            #                  baseline=0.12, 
+            #                  min_depth=0.,
+            #                  max_depth=2)
+
+            self.depth_model = self.depth_model.to(sim_device)
+
+            def normalize_depth(depth, min_depth, max_depth, is_log):
+                depth = torch.nan_to_num(depth, nan=0.0, posinf=max_depth, neginf=0.0)
+                depth = torch.clamp(depth, min_depth, max_depth) # Clamp the depth values
+                depth = torch.log(depth + 1.0) if is_log else depth
+                return depth
+
+            self.normalize_depth_fn = lambda x: normalize_depth(x, 0.15, 2, is_log=False)
+
+            # 7) 高斯模糊（最终平滑，固定参数 + 边缘复制填充）
+            self.apply_gaussian_blur = self.cfg.depth.apply_gaussian_blur  # 是否应用高斯模糊
+            self.gaussian_blur_kernel_size = self.cfg.depth.gaussian_blur_kernel_size  # 核大小(奇数)
+            self.gaussian_blur_sigma = self.cfg.depth.gaussian_blur_sigma     # 标准差(越大越模糊)
+
             # 🔥 预计算 Sobel 卷积核 (用于边缘检测)
             sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32, device=sim_device)
             sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32, device=sim_device)
@@ -636,6 +343,9 @@ class LeggedRobot(BaseTask):
             ) * 10.0  # 0-10 的随机初始相位
             
             # 🔥 环境噪声启用标志
+            dis_noise_prob = getattr(self.cfg.depth, 'dis_noise_prob', 0.5)
+            self.env_has_dis_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < dis_noise_prob
+
             edge_enable_prob = getattr(self.cfg.depth, 'edge_noise_enable_prob', 1.0)
             self.env_has_edge_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < edge_enable_prob
             
@@ -729,16 +439,35 @@ class LeggedRobot(BaseTask):
         depth_image = (depth_image - self.cfg.depth.near_clip) / (self.cfg.depth.far_clip - self.cfg.depth.near_clip)  - 0.5
         return depth_image
     
+    def _get_gaussian_shift_grid(self, depth, shift_x: torch.Tensor, shift_y: torch.Tensor):
+        """生成用于空间抖动的仿射变换网格"""
+        B, C, H, W = depth.size()
+        device = depth.device
+        theta = torch.zeros(B, 2, 3, device=device)
+        theta[:, 0, 0] = 1.0
+        theta[:, 1, 1] = 1.0
+        # 计算归一化的位移量 (-1 到 1 之间)
+        # 注意：grid_sample 的坐标系是 [-1, 1]，所以需要将像素位移转换为归一化坐标
+        theta[:, 0, 2] = -2 * shift_x / (W - 1)
+        theta[:, 1, 2] = -2 * shift_y / (H - 1)
+        
+        grid = torch.nn.functional.affine_grid(theta, size=depth.size(), align_corners=False)
+        return grid
+    
     def process_depth_image(self, depth_images):
         """处理深度图像 (全 GPU 优化版本)"""
         
         depth_images = self.crop_depth_image(depth_images)
         # depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0] 
-        # 
-        # ✅ 为每张图片的每个像素生成不同的距离噪声
-        # depth_images.shape = [num_envs, height, width]
-        noise = self.cfg.depth.dis_noise * 2 * (torch.rand_like(depth_images, device=self.device) - 0.5)
-        depth_images += noise    
+        
+        depth_images = - depth_images
+        # normalize_depth_fn = lambda x: normalize_depth(x, 0.15, 2, is_log=False)
+        # print("depth image min/max before model:", depth_images.min().item(), depth_images.max().item())
+        depth_images = self.normalize_depth_fn(depth_images)
+        # print("depth image min/max after norma:", depth_images.min().item(), depth_images.max().item())
+        depth_images = self.depth_model(depth_images).squeeze(1)
+        # print("depth image min/max after model:", depth_images.min().item(), depth_images.max().item())
+        depth_images = - depth_images
 
         if getattr(self.cfg.depth, 'enable_noise', True):
             # 1) 近距离置为 -far_clip
@@ -746,6 +475,13 @@ class LeggedRobot(BaseTask):
             near_mask = distance < self.cfg.depth.clip_near_distance
             depth_images = depth_images.clone()
             depth_images[near_mask] = -self.cfg.depth.far_clip
+
+
+            if hasattr(self.cfg.depth, 'dis_noise_prob'):
+                noise = self.cfg.depth.dis_noise * 2 * (torch.rand_like(depth_images, device=self.device) - 0.5)
+                apply_mask = self.env_has_dis_noise[:, None, None].expand_as(depth_images)
+                depth_images[apply_mask] = depth_images[apply_mask] + noise[apply_mask]
+
 
             # 2) 高斯噪声（仅对启用的环境）
             if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
@@ -819,6 +555,38 @@ class LeggedRobot(BaseTask):
                 depth_images[salt_mask] = -self.cfg.depth.far_clip
                 depth_images[pepper_mask] = -self.cfg.depth.near_clip
 
+            # ========================== 新增部分 ==========================
+            # 7) Gaussian Shift (空间抖动/错位)
+            # 模拟相机内参标定误差或剧烈震动导致的像素偏移
+            if hasattr(self.cfg.depth, 'gaussian_shift_std') and self.cfg.depth.gaussian_shift_std > 0:
+                shift_std = self.cfg.depth.gaussian_shift_std
+                batch_size = depth_images.size(0)
+                
+                # 为每个环境生成随机的 x 和 y 偏移量
+                shift_x = torch.randn(batch_size, device=self.device) * shift_std
+                shift_y = torch.randn(batch_size, device=self.device) * shift_std
+
+                # 可选：如果定义了 env_has_gaussian_shift，则只对特定环境应用
+                if hasattr(self, 'env_has_gaussian_shift'):
+                    shift_x[~self.env_has_gaussian_shift] = 0.0
+                    shift_y[~self.env_has_gaussian_shift] = 0.0
+
+                # 准备 grid_sample 需要的 4D 输入 (N, C, H, W)
+                depth_4d_shift = depth_images.unsqueeze(1)
+                
+                # 生成采样网格
+                grid = self._get_gaussian_shift_grid(depth_4d_shift, shift_x, shift_y)
+                
+                # 应用空间变换
+                # padding_mode='border' 会重复边缘像素，避免引入无效的0值
+                depth_shifted = torch.nn.functional.grid_sample(
+                    depth_4d_shift, grid, mode='bilinear', padding_mode='border', align_corners=False
+                )
+                
+                # 恢复形状 (N, H, W)
+                depth_images = depth_shifted.squeeze(1)
+            # ==============================================================
+
             
         
         # Clip 到有效范围
@@ -831,40 +599,11 @@ class LeggedRobot(BaseTask):
         # print("depth_image min/max after resize:", depth_images.min().item(), depth_images.max().item())
         # depth_images = torch.clip(depth_images, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
 
-        # # 7) 高斯模糊（逐图分组卷积）
-        # if getattr(self.cfg.depth, 'apply_gaussian_blur', False):
-        #     kernel_size = getattr(self.cfg.depth, 'gaussian_blur_kernel_size', 5)
-        #     sigma = getattr(self.cfg.depth, 'gaussian_blur_sigma', 1.0)
-
-        #     # 当 kernel_size 或 sigma 变化时重建核
-        #     if (not hasattr(self, '_gaussian_kernel')
-        #         or self._gaussian_kernel_size != kernel_size
-        #         or getattr(self, '_gaussian_sigma', None) != sigma):
-        #         x = torch.arange(kernel_size, dtype=torch.float32, device=self.device) - kernel_size // 2
-        #         gauss_1d = torch.exp(-x ** 2 / (2 * sigma ** 2))
-        #         gauss_1d = gauss_1d / gauss_1d.sum()
-        #         gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
-        #         self._gaussian_kernel = gauss_2d.view(1, 1, kernel_size, kernel_size)  # [1,1,k,k]
-        #         self._gaussian_kernel_size = kernel_size
-        #         self._gaussian_sigma = sigma
-
-        #     # 输入 [N,1,H,W] -> [1,N,H,W]，按样本分组卷积
-        #     depth_4d = depth_images.unsqueeze(1)              # [N,1,H,W]
-        #     depth_4d_group = depth_4d.transpose(0, 1)         # [1,N,H,W]
-        #     kernel = self._gaussian_kernel.expand(depth_4d.shape[0], 1, kernel_size, kernel_size)  # [N,1,k,k]
-        #     depth_blurred = torch.nn.functional.conv2d(
-        #         depth_4d_group, kernel, padding=kernel_size // 2, groups=depth_4d.shape[0]
-        #     ).transpose(0, 1).squeeze(1)  # 回到 [N,H,W]
-        #     depth_images = depth_blurred
-        #     print("Applied Gaussian blur to depth images.")
         
-        # 7) 高斯模糊（最终平滑，固定参数 + 边缘复制填充）
-        apply_gaussian_blur = True  # 是否应用高斯模糊
-        gaussian_blur_kernel_size = 3  # 核大小(奇数)
-        gaussian_blur_sigma = 1.0     # 标准差(越大越模糊)
-        if apply_gaussian_blur:
-            k = gaussian_blur_kernel_size
-            sigma = gaussian_blur_sigma
+
+        if self.apply_gaussian_blur:
+            k = self.gaussian_blur_kernel_size
+            sigma = self.gaussian_blur_sigma
             # 缓存核，避免重复构建
             if (not hasattr(self, "_gaussian_kernel")
                 or getattr(self, "_gaussian_kernel_size", None) != k
