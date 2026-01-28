@@ -30,7 +30,7 @@
 
 from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO
 
-class Go2RoughCfg( LeggedRobotCfg ):
+class Go2finetuneRoughCfg( LeggedRobotCfg ):
     class init_state( LeggedRobotCfg.init_state ):
         pos = [0.0, 0.0, 0.42] # x,y,z [m]
         default_joint_angles = { # = target angles [rad] when action = 0.0
@@ -189,10 +189,10 @@ class Go2RoughCfg( LeggedRobotCfg ):
         base_height_target = 0.3
         class scales:
             # tracking rewards
-            tracking_goal_vel = 2.5
-            # tracking_ang_vel = 0.5
-            tracking_lin_vel = 0.25
-            tracking_yaw = 0.25
+            tracking_goal_vel = 0.05
+            tracking_ang_vel = 0.5
+            tracking_lin_vel = 2.5
+            # tracking_yaw = 0.25
             # regularization rewards
             lin_vel_z = -1.0
             ang_vel_xy = -0.05
@@ -210,34 +210,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
             feet_edge = -0.8
 
             feet_air_time = 0.01
-            roll = -1.
-            # # tracking rewards
-            # tracking_goal_vel = 1.5
-            # tracking_ang_vel = 0.5
-            # tracking_lin_vel = 0.5
-            # # tracking_yaw = 0.25
-            # # regularization rewards
-            # lin_vel_z = -0.05
-            # ang_vel_xy = -0.2
-            # orientation = -0.5
-            # dof_acc = -2.5e-7
-            # collision = -1.
-            # action_rate = -0.2
-            # delta_torques = -1.0e-7
-            # torques = -0.00001
-            # # hip_pos = -0.5
-            # hip_pos = -0.6
-            # smoothness = -0.001
-            # dof_error = -0.04
-            # feet_stumble = -1
-            # feet_edge = -0.8
-
-            # feet_air_time = 0.01
-            # roll = -1.5
-
-            # stuck = -5
-            # cur_goals = 1
-            # reached_goals = 1
+            roll = -1.5
             # foot_contact = 2e-5
             
             # 根据HIMLOCO新加的奖励函数
@@ -245,11 +218,11 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
     
 
-class Go2RoughCfgPPO( LeggedRobotCfgPPO ):
+class Go2finetuneRoughCfgPPO( LeggedRobotCfgPPO ):
     class algorithm( LeggedRobotCfgPPO.algorithm ):
         entropy_coef = 0.01
     class runner( LeggedRobotCfgPPO.runner ):
         run_name = ''
-        experiment_name = 'rough_go2'
+        experiment_name = 'finetune_go2'
 
   

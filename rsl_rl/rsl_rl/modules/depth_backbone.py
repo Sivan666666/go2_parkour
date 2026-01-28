@@ -818,10 +818,21 @@ class RecurrentDepthBackbone_Original(nn.Module):
                             )
         self.hidden_states = None
 
-    def forward(self, depth_image, proprioception):
+    def forward(self, depth_image, proprioception, hidden_states=None):
         depth_image = self.base_backbone(depth_image)
         depth_latent = self.combination_mlp(torch.cat((depth_image, proprioception), dim=-1))
-        depth_latent, self.hidden_states = self.rnn(depth_latent[:, None, :], self.hidden_states)
+        
+        # [修改] 使用传入的 hidden_states (如果存在)，否则使用 self.hidden_states
+        hx = hidden_states if hidden_states is not None else self.hidden_states
+        
+        # GRU 前向传播
+        depth_latent, next_hidden = self.rnn(depth_latent[:, None, :], hx)
+        
+        # [修改] 仅在 Rollout 阶段 (hidden_states is None) 更新内部状态
+        # Update阶段我们不希望覆盖环境的hidden state
+        if hidden_states is None:
+            self.hidden_states = next_hidden.detach()
+            
         depth_latent = self.output_mlp(depth_latent.squeeze(1))
         
         return depth_latent

@@ -143,12 +143,12 @@ class LeggedRobotCfg(BaseConfig):
         quantize_height = True
         class noise_scales:
             # 原有的噪声尺度
-            lin_vel = 0.05
-            ang_vel = 0.05
-            gravity = 0.02  # 用于 IMU (roll, pitch, yaw)
-            dof_pos = 0.01
-            dof_vel = 0.05
-            height_measurements = 0.02
+            lin_vel = 0.08
+            ang_vel = 0.08
+            gravity = 0.05  # 用于 IMU (roll, pitch, yaw)
+            dof_pos = 0.05
+            dof_vel = 0.08
+            height_measurements = 0.04
             
             # 补齐的噪声尺度
             rotation = 0.0  # 未使用
@@ -206,7 +206,7 @@ class LeggedRobotCfg(BaseConfig):
 
         selected = False # select a unique terrain type and pass all arguments
         terrain_kwargs = None # Dict of arguments for selected terrain
-        max_init_terrain_level = 5 # starting curriculum state
+        max_init_terrain_level = 9 # starting curriculum state
         terrain_length = 18.
         terrain_width = 4
         num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
@@ -220,7 +220,7 @@ class LeggedRobotCfg(BaseConfig):
                         "discrete": 0., 
                         "stepping stones": 0.0,
                         "gaps": 0., 
-                        "flat": 0.2,
+                        "flat": 0.,
                         "pit": 0.0,
                         "wall": 0.0,
                         "platform": 0.,
@@ -243,7 +243,7 @@ class LeggedRobotCfg(BaseConfig):
         num_goals = 5
 
     class commands:
-        curriculum = True
+        curriculum = False
         max_curriculum = 2.
         num_commands = 4 # default: lin_vel_x, lin_vel_y, ang_vel_yaw, heading (in heading mode ang_vel_yaw is recomputed from heading error)
         resampling_time = 6. # time before command are changed[s]
@@ -253,15 +253,15 @@ class LeggedRobotCfg(BaseConfig):
         ang_vel_clip = 0.4
         # Easy ranges
         class ranges:
-            lin_vel_x = [0., 1.0] # min max [m/s]
+            lin_vel_x = [0.3, 1.0] # min max [m/s]
             lin_vel_y = [0.0, 0.0]   # min max [m/s]
             ang_vel_yaw = [0, 0]    # min max [rad/s]
             heading = [0, 0]
 
         # Easy ranges
         class max_ranges:
-            lin_vel_x = [0.0, 1.0] # min max [m/s]
-            lin_vel_y = [-0.3, 0.3]#[0.15, 0.6]   # min max [m/s]
+            lin_vel_x = [0.3, 1.0] # min max [m/s]
+            lin_vel_y = [0.0, 0.3]#[0.15, 0.6]   # min max [m/s]
             ang_vel_yaw = [-0, 0]    # min max [rad/s]
             heading = [-0, 0] 
 
@@ -317,15 +317,15 @@ class LeggedRobotCfg(BaseConfig):
         randomize_friction = True
         friction_range = [0.6, 2.]
         randomize_base_mass = True
-        added_mass_range = [0., 3.]
+        added_mass_range = [0., 5.]
         randomize_base_com = True
-        added_com_range = [-0.2, 0.2]
+        added_com_range = [-0.4, 0.4]
         push_robots = True
         push_interval_s = 8
         max_push_vel_xy = 0.5
 
         randomize_motor = True
-        motor_strength_range = [0.8, 1.2]
+        motor_strength_range = [0.6, 1.2]
 
         delay_update_global_steps = 24 * 8000
         action_delay = False

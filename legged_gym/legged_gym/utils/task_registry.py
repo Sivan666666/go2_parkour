@@ -37,6 +37,7 @@ import numpy as np
 
 from rsl_rl.env import VecEnv
 from rsl_rl.runners import OnPolicyRunner
+from rsl_rl.runners import Finetune_OnPolicyRunner
 
 from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR
 from .helpers import get_args, update_cfg_from_args, class_to_dict, get_load_path, set_seed, parse_sim_params
@@ -149,11 +150,30 @@ class TaskRegistry():
             log_dir = log_root#os.path.join(log_root, datetime.now().strftime('%b%d_%H-%M-%S') + '_' + train_cfg.runner.run_name)
         
         train_cfg_dict = class_to_dict(train_cfg)
-        runner = OnPolicyRunner(env, 
-                                train_cfg_dict, 
-                                log_dir, 
-                                init_wandb=init_wandb,
-                                device=args.rl_device, **kwargs)
+        # runner = Finetune_OnPolicyRunner(env, 
+        #                         train_cfg_dict, 
+        #                         log_dir, 
+        #                         init_wandb=init_wandb,
+        #                         device=args.rl_device, **kwargs)
+        # 根据 --finetune flag 选择不同的 runner
+        if hasattr(args, 'finetune') and args.finetune:
+            print("*" * 80)
+            print("Using Finetune_OnPolicyRunner for vision-based fine-tuning")
+            print("*" * 80)
+            runner = Finetune_OnPolicyRunner(env, 
+                                    train_cfg_dict, 
+                                    log_dir, 
+                                    init_wandb=init_wandb,
+                                    device=args.rl_device, **kwargs)
+        else:
+            print("*" * 80)
+            print("Using OnPolicyRunner for standard training")
+            print("*" * 80)
+            runner = OnPolicyRunner(env, 
+                                    train_cfg_dict, 
+                                    log_dir, 
+                                    init_wandb=init_wandb,
+                                    device=args.rl_device, **kwargs)
         #save resume path before creating a new log_dir
         resume = train_cfg.runner.resume
         if args.resumeid:
@@ -166,6 +186,8 @@ class TaskRegistry():
             # load_root = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', "rough_a1", train_cfg.runner.load_run)
             resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run, checkpoint=train_cfg.runner.checkpoint)
             runner.load(resume_path)
+            if hasattr(args, 'finetune') and args.finetune:
+                runner.alg.actor_critic.reset_std(train_cfg.policy.init_noise_std, 12, device=runner.device)
             if not train_cfg.policy.continue_from_last_std:
                 runner.alg.actor_critic.reset_std(train_cfg.policy.init_noise_std, 12, device=runner.device)
 

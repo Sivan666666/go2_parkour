@@ -225,9 +225,9 @@ def get_args():
         {"name": "--hitid", "type": str, "default": None, "help": "exptid fot hitting policy"},
 
         {"name": "--web", "action": "store_true", "default": False, "help": "if use web viewer"},
-        {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"}
+        {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
 
-
+        {"name": "--finetune", "action": "store_true", "default": False, "help": "Use Finetune_OnPolicyRunner for vision-based fine-tuning"}
     ]
     # parse arguments
     args = parse_arguments(

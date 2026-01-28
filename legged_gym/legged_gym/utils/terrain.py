@@ -181,16 +181,18 @@ class Terrain:
     def curiculum(self, random=False, max_difficulty=False):
         for j in range(self.cfg.num_cols):
             for i in range(self.cfg.num_rows):
-                difficulty = i / (self.cfg.num_rows-1)
+                difficulty = i / (self.cfg.num_rows-1) * 1.3
+                # difficulty = np.clip(difficulty, 0.8, 1)
                 choice = j / self.cfg.num_cols + 0.001
                 # print(f"Terrain choice={choice:.3f}, difficulty={difficulty:.3f}")
                 if random:
                     if max_difficulty:
-                        terrain = self.make_terrain(choice, np.random.uniform(0.99, 1))
+                        terrain = self.make_terrain(choice, np.random.uniform(1.2, 1.3))
                     else:
                         terrain = self.make_terrain(choice, np.random.uniform(0, 1))
                 else:
                     terrain = self.make_terrain(choice, difficulty)
+                    print(f"Terrain choice={choice:.3f}, difficulty={difficulty:.3f}")
 
                 self.add_terrain_to_map(terrain, i, j)
 
@@ -270,6 +272,8 @@ class Terrain:
 
             # step_width: difficulty=0时为0.4m，difficulty=1时为0.2m
             step_width = 0.4 - 0.2 * difficulty
+            if step_width < 0.17: 
+                step_width = 0.17
             staircase_length = 10.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
 
@@ -371,6 +375,8 @@ class Terrain:
 
             # step_width: difficulty=0时为0.4m，difficulty=1时为0.2m
             step_width = 0.4 - 0.2 * difficulty
+            if step_width < 0.17: 
+                step_width = 0.17
             staircase_length = 10.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
 

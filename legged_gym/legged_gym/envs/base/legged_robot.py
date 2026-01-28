@@ -53,7 +53,8 @@ from tqdm import tqdm
 import cv2
 import matplotlib.pyplot as plt
 
-import torch
+
+from time import time
 import torch.nn.functional as F
 from torch.autograd import Variable
 
@@ -428,6 +429,7 @@ class LeggedRobot(BaseTask):
             self.extras["depth"] = self.depth_buffer[:, -2]  # have already selected last one
         else:
             self.extras["depth"] = None
+        # print(self.privileged_obs_buf)
         return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
 
     def get_history_observations(self):
@@ -655,6 +657,7 @@ class LeggedRobot(BaseTask):
 
         if self.global_counter % self.cfg.depth.update_interval != 0:
             return
+        t0 = time()
         self.gym.step_graphics(self.sim) # required to render in headless mode
         self.gym.render_all_camera_sensors(self.sim)
         self.gym.start_access_image_tensors(self.sim)
@@ -701,7 +704,8 @@ class LeggedRobot(BaseTask):
 
             self.depth_buffer[update_env_ids] = torch.cat([prev_depth, new_depth], dim=1)
 
-
+        t1 = time()
+        print(f"Depth buffer update time: {(t1 - t0):.2f} s")
         self.gym.end_access_image_tensors(self.sim)
 
     def _update_goals(self):
@@ -789,7 +793,7 @@ class LeggedRobot(BaseTask):
                 height, width = depth_image.shape[:2]
                 new_height = int(56 * scale_factor)
                 new_width = int(87 * scale_factor)
-                print(new_height, new_width)
+                # print(new_height, new_width)
 
                 resized_depth_image = cv2.resize(depth_image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
 
@@ -905,6 +909,7 @@ class LeggedRobot(BaseTask):
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
             rew = self.reward_functions[i]() * self.reward_scales[name]
+            # print(f"Reward for {name}: {rew}")
             self.rew_buf += rew
             self.episode_sums[name] += rew
         if self.cfg.rewards.only_positive_rewards:
@@ -1017,7 +1022,8 @@ class LeggedRobot(BaseTask):
                                 self.reindex(self.action_history_buf[:, -1]),                                         # num_actions
                                 self.reindex_feet(self.contact_filt.float()-0.5),                                     # 4
                             ), dim=-1)
-
+        # print("obs_buf:", self.yaw[:, None])
+        # print("obs_buf:", self.commands[:, 2:3])
         if self.add_noise:
             # 确保 noise_scale_vec 的长度与 obs_buf 匹配
             noise_vec_len = obs_buf.shape[1]
@@ -1289,6 +1295,8 @@ class LeggedRobot(BaseTask):
             torques = actions_scaled
         else:
             raise NameError(f"Unknown controller type: {control_type}")
+        # print("torques:", torch.max(torques))
+        # print("torque_limits:", self.torque_limits)
         return torch.clip(torques, -self.torque_limits, self.torque_limits)
 
     def _reset_dofs(self, env_ids):
@@ -2102,6 +2110,10 @@ class LeggedRobot(BaseTask):
         target_vec_norm = self.target_pos_rel / (norm + 1e-5)
         cur_vel = self.root_states[:, 7:9]
         rew = torch.minimum(torch.sum(target_vec_norm * cur_vel, dim=-1), self.commands[:, 0]) / (self.commands[:, 0] + 1e-5)
+        rew = torch.clamp(rew, min=0.0)
+            # print(cur_vel)
+            # print(target_vec_norm)
+            # print(rew)
         return rew
     
     def _reward_tracking_lin_vel(self):
@@ -2233,6 +2245,17 @@ class LeggedRobot(BaseTask):
         forces_reward = torch.square(forces[:,0]+forces[:,2]-forces[:,1]-forces[:,3])
         return forces_reward
     
+    def _reward_stuck(self):
+        # Penalize stuck
+        return (torch.abs(self.base_lin_vel[:, 0]) < 0.1) * (torch.abs(self.commands[:, 0]) > 0.1)
+    
+    def _reward_cur_goals(self):
+        print(self.cur_goal_idx)
+        return self.cur_goal_idx 
+    
+    def _reward_reached_goals(self):
+        return 1 / (0.4 + torch.norm(self.root_states[:, :2] - self.cur_goals[:, :2], dim=1))
+
     # def _reward_no_move_when_command(self):
     #     # 取命令范围阈值
     #     lin_vel_clip = self.cfg.commands.lin_vel_clip if hasattr(self.cfg.commands, 'lin_vel_clip') else 0.1

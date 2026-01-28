@@ -33,12 +33,13 @@ import numpy as np
 
 from rsl_rl.utils import split_and_pad_trajectories
 
-class RolloutStorage:
+class RolloutStorage_Student:
     class Transition:
         def __init__(self):
             self.observations = None
             self.critic_observations = None
             self.actions = None
+            self.depth_latent = None
             self.rewards = None
             self.dones = None
             self.values = None
@@ -46,6 +47,8 @@ class RolloutStorage:
             self.action_mean = None
             self.action_sigma = None
             self.hidden_states = None
+            self.depth_images = None  # [新增] 深度图
+            self.depth_encoder_hidden_states = None  # [新增] 存储 hidden states
         def clear(self):
             self.__init__()
 
@@ -67,7 +70,12 @@ class RolloutStorage:
         self.rewards = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
         self.actions = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
         self.dones = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device).byte()
-
+        self.depth_latent = torch.zeros(num_transitions_per_env, num_envs, 32, device=self.device)
+        self.depth_images = torch.zeros(num_transitions_per_env, num_envs, 58, 87, device=self.device)
+        # [新增] 初始化 hidden states 存储空间
+        # 存储形状: (Num_Transitions, Num_Envs, Num_Layers, Hidden_Dim)
+        depth_encoder_hidden_shape=(1, 512)
+        self.depth_encoder_hidden_states = torch.zeros(num_transitions_per_env, num_envs, *depth_encoder_hidden_shape, device=self.device)
         # For PPO
         self.actions_log_prob = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
         self.values = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
@@ -90,14 +98,19 @@ class RolloutStorage:
             raise AssertionError("Rollout buffer overflow")
         self.observations[self.step].copy_(transition.observations)
         if self.privileged_observations is not None: self.privileged_observations[self.step].copy_(transition.critic_observations)
-        self.actions[self.step].copy_(transition.actions)        
+        self.actions[self.step].copy_(transition.actions)
+        self.depth_latent[self.step].copy_(transition.depth_latent)
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
         self.dones[self.step].copy_(transition.dones.view(-1, 1))
         self.values[self.step].copy_(transition.values)
         self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
         self.mu[self.step].copy_(transition.action_mean)
         self.sigma[self.step].copy_(transition.action_sigma)
-
+        # [新增] 存储深度图
+        if transition.depth_images is not None:
+            self.depth_images[self.step].copy_(transition.depth_images)
+        if transition.depth_encoder_hidden_states is not None:
+            self.depth_encoder_hidden_states[self.step].copy_(transition.depth_encoder_hidden_states.permute(1, 0, 2))
         self._save_hidden_states(transition.hidden_states)
         self.step += 1
 
@@ -145,19 +158,17 @@ class RolloutStorage:
         trajectory_lengths = (done_indices[1:] - done_indices[:-1])
         return trajectory_lengths.float().mean(), self.rewards.mean()
 
+
     def mini_batch_generator(self, num_mini_batches, num_epochs=8):
         batch_size = self.num_envs * self.num_transitions_per_env
         mini_batch_size = batch_size // num_mini_batches
         indices = torch.randperm(num_mini_batches*mini_batch_size, requires_grad=False, device=self.device)
 
         observations = self.observations.flatten(0, 1)
-
-        # # shift the observations by one step to the left to get the next observations
-        # next_disc_observations = torch.cat((self.disc_observations[1:], self.disc_observations[-1].unsqueeze(0)), dim=0)
-        # done_indices = self.dones.nonzero(as_tuple=False).squeeze()
-        # next_disc_observations[done_indices] = self.disc_observations[done_indices]
-        # next_disc_observations = next_disc_observations.flatten(0, 1)
-
+        depth_latent = self.depth_latent.flatten(0, 1)
+        depth_images = self.depth_images.flatten(0, 1) # [新增] 展平深度图
+        # [新增] 展平 hidden states: (T*N, Num_Layers, Hidden_Dim)
+        depth_encoder_hidden_states = self.depth_encoder_hidden_states.flatten(0, 1)
         if self.privileged_observations is not None:
             critic_observations = self.privileged_observations.flatten(0, 1)
         else:
@@ -178,8 +189,14 @@ class RolloutStorage:
                 end = (i+1)*mini_batch_size
                 batch_idx = indices[start:end]
 
+                # [新增] 获取 batch 的 hidden states
+                depth_encoder_hidden_states_batch = depth_encoder_hidden_states[batch_idx]
+                # 转换回 GRU 需要的形状: (Num_Layers, Batch_Size, Hidden_Dim)
+                depth_encoder_hidden_states_batch = depth_encoder_hidden_states_batch.permute(1, 0, 2)
+
                 obs_batch = observations[batch_idx]
                 critic_observations_batch = critic_observations[batch_idx]
+                depth_latent_batch = depth_latent[batch_idx]
                 actions_batch = actions[batch_idx]
                 target_values_batch = values[batch_idx]
                 returns_batch = returns[batch_idx]
@@ -187,10 +204,10 @@ class RolloutStorage:
                 advantages_batch = advantages[batch_idx]
                 old_mu_batch = old_mu[batch_idx]
                 old_sigma_batch = old_sigma[batch_idx]
-
+                depth_images_batch = depth_images[batch_idx]
                 
                 yield obs_batch, critic_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, \
-                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None, None), None
+                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None, None), None, depth_latent_batch, depth_images_batch, depth_encoder_hidden_states_batch
 
     # for RNNs only
     def reccurent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
@@ -220,6 +237,7 @@ class RolloutStorage:
                 critic_obs_batch = padded_critic_obs_trajectories[:, first_traj:last_traj]
 
                 actions_batch = self.actions[:, start:stop]
+                depth_latent_batch = self.depth_latent[:, start:stop]
                 old_mu_batch = self.mu[:, start:stop]
                 old_sigma_batch = self.sigma[:, start:stop]
                 returns_batch = self.returns[:, start:stop]
@@ -240,6 +258,6 @@ class RolloutStorage:
                 hid_c_batch = hid_c_batch[0] if len(hid_c_batch)==1 else hid_a_batch
 
                 yield obs_batch, critic_obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, \
-                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (hid_a_batch, hid_c_batch), masks_batch
+                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (hid_a_batch, hid_c_batch), masks_batch, depth_latent_batch
                 
                 first_traj = last_traj

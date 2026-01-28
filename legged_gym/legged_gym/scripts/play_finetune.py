@@ -171,56 +171,41 @@ def play(args):
         print("Loading jit for policy: ", path)
         policy_jit = torch.jit.load(path, map_location=env.device)
     else:
+        # 获取封装好的推理策略 (包含 depth -> latent 的处理)
         policy = ppo_runner.get_inference_policy(device=env.device)
-    estimator = ppo_runner.get_estimator_inference_policy(device=env.device)
-    if env.cfg.depth.use_camera:
-        depth_encoder = ppo_runner.get_depth_encoder_inference_policy(device=env.device)
 
     actions = torch.zeros(env.num_envs, 12, device=env.device, requires_grad=False)
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
-    show_plots = False # 改为 False 关闭所有绘图
-    # 历史
+    if env.cfg.depth.use_camera:
+        depth_encoder = ppo_runner.get_depth_encoder_inference_policy(device=env.device)
+
+    show_plots = False 
+    # 历史记录初始化
     cmd_vx_hist, act_vx_hist, base_h_hist = [], [], []
     yaw_hist, yaw_cmd_hist, pos_x_hist, pos_y_hist = [], [], [], []
 
-    # 子图初始化：两张图
+    # 图表初始化
     if show_plots:
         try:
-            import matplotlib.pyplot as plt
             plt.ion()
-            # 图1：速度 + 高度（两行）
             fig1, (ax_v, ax_h) = plt.subplots(2, 1, num=777, figsize=(8, 6), sharex=True)
-            ax_v.set_title("Velocity (lookat env)"); ax_v.set_ylabel("vx (m/s)")
+            ax_v.set_title("Velocity"); ax_v.set_ylabel("vx (m/s)")
             line_cmd, = ax_v.plot([], [], label='cmd vx', color='tab:red')
             line_act, = ax_v.plot([], [], label='actual vx', color='tab:blue')
             ax_v.legend(); ax_v.grid(True, alpha=0.3)
-            ax_h.set_title("Base height (lookat env)")
-            ax_h.set_xlabel("Step"); ax_h.set_ylabel("height (m)")
+            ax_h.set_title("Base height"); ax_h.set_ylabel("height (m)")
             line_bh, = ax_h.plot([], [], label='base_height', color='tab:green')
-            ax_h.legend(); ax_h.grid(True, alpha=0.3)
-
-            # 图2：yaw + 位置（3行：yaw、x、y）
+            
             fig2, (ax_yaw, ax_px, ax_py) = plt.subplots(3, 1, num=778, figsize=(8, 9), sharex=True)
-            ax_yaw.set_title("Yaw angle & command (lookat env)")
-            ax_yaw.set_ylabel("yaw (rad)")
+            ax_yaw.set_title("Yaw"); ax_yaw.set_ylabel("yaw (rad)")
             line_yaw, = ax_yaw.plot([], [], label='yaw', color='tab:purple')
             line_yaw_cmd, = ax_yaw.plot([], [], label='yaw_cmd', color='tab:orange')
-            ax_yaw.legend(); ax_yaw.grid(True, alpha=0.3)
-            ax_px.set_title("Base position X"); ax_px.set_ylabel("x (m)")
-            line_px, = ax_px.plot([], [], label='x', color='tab:brown')
-            ax_px.legend(); ax_px.grid(True, alpha=0.3)
-            ax_py.set_title("Base position Y"); ax_py.set_xlabel("Step"); ax_py.set_ylabel("y (m)")
-            line_py, = ax_py.plot([], [], label='y', color='tab:cyan')
-            ax_py.legend(); ax_py.grid(True, alpha=0.3)
+            ax_px.set_title("Pos X"); line_px, = ax_px.plot([], [], label='x', color='tab:brown')
+            ax_py.set_title("Pos Y"); line_py, = ax_py.plot([], [], label='y', color='tab:cyan')
         except Exception:
             show_plots = False
-            fig1 = fig2 = ax_v = ax_h = ax_yaw = ax_px = ax_py = None
-            line_cmd = line_act = line_bh = line_yaw = line_yaw_cmd = line_px = line_py = None
-    else:
-        fig1 = fig2 = ax_v = ax_h = ax_yaw = ax_px = ax_py = None
-        line_cmd = line_act = line_bh = line_yaw = line_yaw_cmd = line_px = line_py = None
 
 
     for i in range(10*int(env.max_episode_length)):
@@ -251,23 +236,13 @@ def play(args):
                         depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
                         depth_latent = depth_latent_and_yaw[:, :-2]
                         depth_yaw = depth_latent_and_yaw[:, -2:] * 1.5
-                    # 不使用 yaw 修正，保持原始观测
-                    # obs[:, 6:8] = 1.5*depth_yaw  # 注释掉这行
-                    # obs[:, 6:8] = -env.yaw.unsqueeze(1)   # [num_envs, 2] 两列都填 -yaw  # 强制设为0
-
-                    # look_id = env.lookat_id
-                    # print("env.yaw[look_id]:", env.yaw[look_id].item())
-                    # print("obs[look_id, 6:8]:", obs[look_id, 6:7].item())
-                    # obs[:, 6:8] = 0
+                    actions = policy(obs.detach(), scandots_latent=depth_latent)
                 
                         
                 else:
-                    depth_latent = None
-                # obs[:, 6:8] = 0  # 强制设为0
-                if hasattr(ppo_runner.alg, "depth_actor"):
-                    actions = ppo_runner.alg.depth_actor(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
-                else:
-                    actions = policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
+                    actions = policy(obs.detach(), scandots_latent=depth_latent)
+                
+                    
             
         obs, _, rews, dones, infos = env.step(actions.detach())
         if args.web:
@@ -279,8 +254,7 @@ def play(args):
         # 记录
         look_id = env.lookat_id
         # print("env.yaw[look_id]:", env.yaw[look_id].item())
-        print("obs[look_id, 6:7]:", obs[look_id, 6:7].item())
-        print("obs[look_id, 7:8]:", obs[look_id, 7:8].item())
+        # print("obs[look_id, 6:8]:", obs[look_id, 6:7].item())
         cmd_vx = env.commands[look_id, 0].item()
         act_vx = env.base_lin_vel[look_id, 0].item()
         base_h = env._get_base_heights()[look_id].item()
