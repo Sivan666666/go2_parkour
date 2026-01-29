@@ -38,7 +38,7 @@ class LeggedRobotCfg(BaseConfig):
         load_student_config = False
         mask_priv_obs = False
     class env:
-        num_envs = 6144
+        num_envs = 4096
 
         n_scan = 132
         n_priv = 3+3 +3
@@ -82,7 +82,7 @@ class LeggedRobotCfg(BaseConfig):
 
         contact_buf_len = 100
 
-        next_goal_threshold = 0.2
+        next_goal_threshold = 0.3
         reach_goal_delay = 0.1
         num_future_goal_obs = 2
 
@@ -138,17 +138,17 @@ class LeggedRobotCfg(BaseConfig):
         clip_observations = 100.
         clip_actions = 1.2
     class noise:
-        add_noise = True
+        add_noise = False
         noise_level = 1.0 # scales other values
         quantize_height = True
         class noise_scales:
             # 原有的噪声尺度
             lin_vel = 0.05
             ang_vel = 0.05
-            gravity = 0.08  # 用于 IMU (roll, pitch, yaw)
+            gravity = 0.05  # 用于 IMU (roll, pitch, yaw)
             dof_pos = 0.05
             dof_vel = 0.05
-            height_measurements = 0.03
+            height_measurements = 0.02
             
             # 补齐的噪声尺度
             rotation = 0.0  # 未使用
@@ -227,10 +227,10 @@ class LeggedRobotCfg(BaseConfig):
                         "hollow stairs down": 0., 
                         "hollow stairs up": 0.5,
                         "parkour": 0.0,         # 0.2
-                        "parkour_hurdle": 0.2,  # 0.2
+                        "parkour_hurdle": 0.,  # 0.2
                         "parkour_flat": 0.0,
-                        "parkour_step": 0.2,    # 0.2
-                        "parkour_gap": 0.2,     # 0.2
+                        "parkour_step": 0.,    # 0.2
+                        "parkour_gap": 0.,     # 0.2
                         "demo": 0.0}            # 0.2
         
         

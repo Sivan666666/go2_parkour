@@ -2364,12 +2364,17 @@ class LeggedRobot(BaseTask):
         # allowed = (self.env_class == 17) | (self.env_class == 9)
         # rew[~allowed] *= 0.01
         # rew[self.env_class != 17] = 0.
-        rew[self.env_class != 9] *= 0.00001
+        rew[self.env_class == 9] *= 2
+        rew[self.env_class != 9] *= 0.1
         return rew
     
     def _reward_roll(self):
         # 专门的 roll 惩罚项（便于单独调权重）
         return torch.square(self.roll)  # 或 torch.square(self.roll)
+    
+    def _reward_pitch(self):
+        # 专门的 pitch 惩罚项（便于单独调权重）
+        return torch.square(self.pitch)  # 或 torch.square(self.pitch)
 
     def _reward_dof_acc(self):
         return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
@@ -2447,24 +2452,6 @@ class LeggedRobot(BaseTask):
         
         # 1. 原有的奖励：只在触地瞬间给予 (长步子奖励，碎步惩罚)
         rew_airTime = torch.sum((self.feet_air_time - 0.5) * first_contact, dim=1) 
-        
-        # ==================== 修改开始 ====================
-        # 2. 新增惩罚：防止脚一直腾空 (Continuous Air Penalty)
-        # 设定一个允许的最大滞空时间 (例如 1.0秒，正常Trot步态通常在0.5s左右)
-        max_allowed_air_time = 2.0 
-        
-        # 找出那些滞空时间已经超标的脚 (无论是否触地，只要计时器超过阈值就罚)
-        long_air_mask = self.feet_air_time > max_allowed_air_time
-        
-        # 计算惩罚值：每只超标的脚，每一步(step)都扣分
-        # 建议乘以 dt，这样惩罚值与时间成正比，或者直接给一个固定的 step 惩罚
-        # 这里演示给一个固定的惩罚系数 (例如 -1.0)
-        rew_air_penalty = torch.sum(long_air_mask, dim=1) * 1.0 
-        
-        # 从总奖励中扣除
-        rew_airTime -= rew_air_penalty
-        # ==================== 修改结束 ====================
-
         rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command
         self.feet_air_time *= ~contact_filt
         mask = (self.commands[:, 0] > 0) & (self.base_lin_vel[:, 0] < 0)
@@ -2480,6 +2467,13 @@ class LeggedRobot(BaseTask):
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
         return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
 
+    def _reward_stuck(self):
+        # Penalize stuck
+        return (torch.abs(self.base_lin_vel[:, 0]) < 0.1) * (torch.abs(self.commands[:, 0]) > 0.1)
+    
+    def _reward_cur_goals(self):
+        return self.cur_goal_idx
+    
     # def _reward_no_move_when_command(self):
     #     # 取命令范围阈值
     #     lin_vel_clip = self.cfg.commands.lin_vel_clip if hasattr(self.cfg.commands, 'lin_vel_clip') else 0.1

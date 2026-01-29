@@ -181,12 +181,12 @@ class Terrain:
     def curiculum(self, random=False, max_difficulty=False):
         for j in range(self.cfg.num_cols):
             for i in range(self.cfg.num_rows):
-                difficulty = i / (self.cfg.num_rows-1) * 1.25 
+                difficulty = i / (self.cfg.num_rows-1) 
                 choice = j / self.cfg.num_cols + 0.001
                 # print(f"Terrain choice={choice:.3f}, difficulty={difficulty:.3f}")
                 if random:
                     if max_difficulty:
-                        terrain = self.make_terrain(choice, np.random.uniform(1., 1.1))
+                        terrain = self.make_terrain(choice, np.random.uniform(1, 1.2))
                     else:
                         terrain = self.make_terrain(choice, np.random.uniform(0, 1))
                 else:

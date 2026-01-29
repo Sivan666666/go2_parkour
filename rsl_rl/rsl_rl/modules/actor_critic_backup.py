@@ -87,46 +87,38 @@ class StateHistoryEncoder(nn.Module):
 
 class ScanAttentionEncoder(nn.Module):
     """
-    带有 Cross-Attention 和最终映射 MLP 的扫描特征编码器
-    逻辑：Scan -> MLP -> KV; Proprio -> MLP -> Query -> Cross-Attention -> Final MLP
+    带有 Cross-Attention 的扫描特征编码器
+    逻辑：Scan -> MLP -> KV; Proprio -> MLP -> Query
     """
     def __init__(self, num_scan, scan_encoder_dims, proprio_dim, activation, if_scan_encode):
         super().__init__()
-        # 1. 基础 Scan MLP (提取原始特征)
+        # 1. 基础 Scan MLP (保留原始逻辑)
         if if_scan_encode:
             layers = [nn.Linear(num_scan, scan_encoder_dims[0]), activation]
             for l in range(len(scan_encoder_dims) - 1):
                 layers.append(nn.Linear(scan_encoder_dims[l], scan_encoder_dims[l+1]))
                 layers.append(nn.Tanh() if l == len(scan_encoder_dims) - 2 else activation)
             self.base_mlp = nn.Sequential(*layers)
-            self.internal_dim = scan_encoder_dims[-1]
+            self.output_dim = scan_encoder_dims[-1]
         else:
             self.base_mlp = nn.Identity()
-            self.internal_dim = num_scan
+            self.output_dim = num_scan
 
         # 2. Proprioception 编码器 (Query)
+        # 编码到与 scan 特征相同的维度以便进行 Attention
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 128),
             activation,
-            nn.Linear(128, self.internal_dim)
+            nn.Linear(128, self.output_dim)
         )
 
-        # 3. 两层 Cross-Attention
+        # 3. 两层 Cross-Attention (与深度图架构一致)
+        # 注意：num_heads 需要能被 output_dim 整除，这里设为 4
         self.attn_layers = nn.ModuleList([
-            nn.MultiheadAttention(embed_dim=self.internal_dim, num_heads=4, batch_first=True)
+            nn.MultiheadAttention(embed_dim=self.output_dim, num_heads=4, batch_first=True)
             for _ in range(2)
         ])
-        self.norms = nn.ModuleList([nn.LayerNorm(self.internal_dim) for _ in range(2)])
-
-        # 4. 🔥 最终映射 MLP (新增)
-        # 将 Attention 的输出进一步处理为最终维度
-        self.final_mlp = nn.Sequential(
-            nn.Linear(self.internal_dim, self.internal_dim),
-            activation,
-            nn.Linear(self.internal_dim, self.internal_dim),
-            nn.Tanh() # 保持输出分布在 [-1, 1]，与原始扫描编码器输出风格一致
-        )
-        self.output_dim = self.internal_dim
+        self.norms = nn.ModuleList([nn.LayerNorm(self.output_dim) for _ in range(2)])
 
     def forward(self, scan, proprioception):
         # Scan 特征作为 Key/Value: [batch, 1, dim]
@@ -140,10 +132,7 @@ class ScanAttentionEncoder(nn.Module):
             attn_out, _ = self.attn_layers[i](query=x, key=scan_feat, value=scan_feat)
             x = self.norms[i](x + attn_out) # 残差连接 + 归一化
             
-        # 5. 🔥 映射成最终的 scan_latent
-        x = x.squeeze(1) # [batch, dim]
-        scan_latent = self.final_mlp(x)
-        return scan_latent
+        return x.squeeze(1) # 返回最终的 scan_latent [batch, dim]
 
 class Actor(nn.Module):
     def __init__(self, num_prop, 
@@ -182,20 +171,37 @@ class Actor(nn.Module):
 
         self.history_encoder = StateHistoryEncoder(activation, num_prop, num_hist, priv_encoder_output_dim)
 
-        # 移除原本的 Sequential scan_encoder，改用 ScanAttentionEncoder
         if self.if_scan_encode:
-            # 注意：这里需要传入本体感知的维度 num_prop
-            self.scan_encoder = ScanAttentionEncoder(
-                num_scan=num_scan,
-                scan_encoder_dims=scan_encoder_dims,
-                proprio_dim=num_prop, 
-                activation=activation,
-                if_scan_encode=self.if_scan_encode
-            )
-            self.scan_encoder_output_dim = self.scan_encoder.output_dim
+            scan_encoder = []
+            scan_encoder.append(nn.Linear(num_scan, scan_encoder_dims[0]))
+            scan_encoder.append(activation)
+            for l in range(len(scan_encoder_dims) - 1):
+                if l == len(scan_encoder_dims) - 2:
+                    scan_encoder.append(nn.Linear(scan_encoder_dims[l], scan_encoder_dims[l+1]))
+                    scan_encoder.append(nn.Tanh())
+                else:
+                    scan_encoder.append(nn.Linear(scan_encoder_dims[l], scan_encoder_dims[l + 1]))
+                    scan_encoder.append(activation)
+            self.scan_encoder = nn.Sequential(*scan_encoder)
+            self.scan_encoder_output_dim = scan_encoder_dims[-1]
         else:
             self.scan_encoder = nn.Identity()
             self.scan_encoder_output_dim = num_scan
+
+        # # 获取本体感知维度
+        # num_proprio = 53 
+        
+        # # 使用封装好的 ScanAttentionEncoder
+        # self.scan_encoder = ScanAttentionEncoder(
+        #     num_scan=num_scan,
+        #     scan_encoder_dims=scan_encoder_dims,
+        #     proprio_dim=num_proprio,
+        #     activation=activation,
+        #     if_scan_encode=self.if_scan_encode
+        # )
+        
+        # # 最终输出维度
+        # self.scan_encoder_output_dim = self.scan_encoder.output_dim
         
         actor_layers = []
         actor_layers.append(nn.Linear(num_prop+
@@ -215,12 +221,11 @@ class Actor(nn.Module):
         self.actor_backbone = nn.Sequential(*actor_layers)
 
     def forward(self, obs, hist_encoding: bool, eval=False, scandots_latent=None):
-        proprio = obs[:, :self.num_prop]
         if not eval:
             if self.if_scan_encode:
                 obs_scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
                 if scandots_latent is None:
-                    scan_latent = self.scan_encoder(obs_scan, proprio)
+                    scan_latent = self.scan_encoder(obs_scan)   
                 else:
                     scan_latent = scandots_latent
                 obs_prop_scan = torch.cat([obs[:, :self.num_prop], scan_latent], dim=1)
@@ -238,7 +243,7 @@ class Actor(nn.Module):
             if self.if_scan_encode:
                 obs_scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
                 if scandots_latent is None:
-                    scan_latent = self.scan_encoder(obs_scan, proprio)
+                    scan_latent = self.scan_encoder(obs_scan)   
                 else:
                     scan_latent = scandots_latent
                 obs_prop_scan = torch.cat([obs[:, :self.num_prop], scan_latent], dim=1)
@@ -263,7 +268,7 @@ class Actor(nn.Module):
     
     def infer_scandots_latent(self, obs):
         scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
-        return self.scan_encoder(scan, obs[:, :self.num_prop])
+        return self.scan_encoder(scan)
 
 class ActorCriticRMA(nn.Module):
     is_recurrent = False

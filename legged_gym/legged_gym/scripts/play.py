@@ -103,7 +103,7 @@ def play(args):
                                     "discrete": 0., 
                                     "stepping stones": 0.0,
                                     "gaps": 0., 
-                                    "flat": 0.,
+                                    "flat": 0.5,
                                     "pit": 0.0,
                                     "wall": 0.0,
                                     "platform": 0.,
@@ -112,8 +112,8 @@ def play(args):
                                     "parkour": 0.0,         # 0.2
                                     "parkour_hurdle": 0.0,  # 0.2
                                     "parkour_flat": 0.,
-                                    "parkour_step": 0.,    # 0.2
-                                    "parkour_gap": 0.,     # 0.2
+                                    "parkour_step": 0.5,    # 0.2
+                                    "parkour_gap": 0.5,     # 0.2
                                     "demo": 0.0}            # 0.2
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
@@ -228,7 +228,7 @@ def play(args):
         # env.commands[:, 2] = 0.0  # yaw rate command 设为0
         
         # # 如果你想保持特定的前进方向，可以设置：
-        env.commands[:, 0] = 1  # forward velocity
+        env.commands[:, 0] = 0.5  # forward velocity
         env.commands[:, 2] = 0.  # lateral velocity
 
         with torch.no_grad():
