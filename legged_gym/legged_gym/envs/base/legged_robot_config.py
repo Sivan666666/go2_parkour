@@ -138,17 +138,27 @@ class LeggedRobotCfg(BaseConfig):
         clip_observations = 100.
         clip_actions = 1.2
     class noise:
-        add_noise = False
+        add_noise = True
         noise_level = 1.0 # scales other values
         quantize_height = True
         class noise_scales:
-            rotation = 0.0
-            dof_pos = 0.01
-            dof_vel = 0.05
+            # 原有的噪声尺度
             lin_vel = 0.05
             ang_vel = 0.05
-            gravity = 0.02
-            height_measurements = 0.02
+            gravity = 0.08  # 用于 IMU (roll, pitch, yaw)
+            dof_pos = 0.05
+            dof_vel = 0.05
+            height_measurements = 0.03
+            
+            # 补齐的噪声尺度
+            rotation = 0.0  # 未使用
+            commands = 0.0  # 命令不加噪声 (cmd_yaw, delta_yaw, cmd_xy, cmd_vx)
+            env_class = 0.0  # 环境类别标志不加噪声
+            actions = 0.0  # 上一时刻动作不加噪声
+            foot_contacts = 0.0  # 足端接触不加噪声
+            priv_explicit = 0.0  # 私有显式观测不加噪声
+            priv_latent = 0.0  # 私有潜在观测不加噪声
+            history = 0.0  # 历史观测不加噪声
 
     class terrain:
         mesh_type = 'trimesh' # "heightfield" # none, plane, heightfield or trimesh
@@ -217,10 +227,10 @@ class LeggedRobotCfg(BaseConfig):
                         "hollow stairs down": 0., 
                         "hollow stairs up": 0.5,
                         "parkour": 0.0,         # 0.2
-                        "parkour_hurdle": 0.,  # 0.2
+                        "parkour_hurdle": 0.2,  # 0.2
                         "parkour_flat": 0.0,
-                        "parkour_step": 0.,    # 0.2
-                        "parkour_gap": 0.,     # 0.2
+                        "parkour_step": 0.2,    # 0.2
+                        "parkour_gap": 0.2,     # 0.2
                         "demo": 0.0}            # 0.2
         
         
@@ -353,7 +363,7 @@ class LeggedRobotCfg(BaseConfig):
         soft_dof_vel_limit = 1
         soft_torque_limit = 0.4
         base_height_target = 1.
-        max_contact_force = 40. # forces above this value are penalized
+        max_contact_force = 300. # forces above this value are penalized
 
 
 

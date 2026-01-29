@@ -228,7 +228,7 @@ def play(args):
         # env.commands[:, 2] = 0.0  # yaw rate command 设为0
         
         # # 如果你想保持特定的前进方向，可以设置：
-        env.commands[:, 0] = 0.5  # forward velocity
+        env.commands[:, 0] = 1  # forward velocity
         env.commands[:, 2] = 0.  # lateral velocity
 
         with torch.no_grad():
