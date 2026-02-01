@@ -97,7 +97,7 @@ def play(args):
 
     env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
                                     "normal stairs down": 0.0,
-                                    "normal stairs up": 0.,
+                                    "normal stairs up": 0.5,
                                     "steep hollow stairs down": 0.0,
                                     "steep hollow stairs up": 0.5,
                                     "discrete": 0., 
@@ -112,8 +112,8 @@ def play(args):
                                     "parkour": 0.0,         # 0.2
                                     "parkour_hurdle": 0.0,  # 0.2
                                     "parkour_flat": 0.,
-                                    "parkour_step": 0.,    # 0.2
-                                    "parkour_gap": 0.,     # 0.2
+                                    "parkour_step": 0.5,    # 0.2
+                                    "parkour_gap": 0.5,     # 0.2
                                     "demo": 0.0}            # 0.2
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
@@ -264,10 +264,14 @@ def play(args):
                 else:
                     depth_latent = None
                 # obs[:, 6:8] = 0  # 强制设为0
+                obs_est = obs.clone()
+                priv_states_estimated = estimator(obs_est[:, :train_cfg.estimator.num_prop])
+                obs_est[:, train_cfg.estimator.num_prop+train_cfg.estimator.num_scan:train_cfg.estimator.num_prop+train_cfg.estimator.num_scan+train_cfg.estimator.priv_states_dim] = priv_states_estimated
+
                 if hasattr(ppo_runner.alg, "depth_actor"):
-                    actions = ppo_runner.alg.depth_actor(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
+                    actions = ppo_runner.alg.depth_actor(obs_est.detach(), hist_encoding=True, scandots_latent=depth_latent)
                 else:
-                    actions = policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
+                    actions = policy(obs_est.detach(), hist_encoding=True, scandots_latent=depth_latent)
             
         obs, _, rews, dones, infos = env.step(actions.detach())
         if args.web:
