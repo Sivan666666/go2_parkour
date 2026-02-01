@@ -1036,6 +1036,7 @@ class LeggedRobot(BaseTask):
                 self._draw_height_samples()
                 self._draw_goals()
                 self._draw_feet()
+                self._draw_edge_mask()
             if self.cfg.depth.use_camera:
                 window_name = "Depth Image"
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -2128,7 +2129,73 @@ class LeggedRobot(BaseTask):
                 pose_arrow = pose_robot[:2] + 0.2*(i+3) * target_vec_norm[self.lookat_id, :2].cpu().numpy()
                 pose = gymapi.Transform(gymapi.Vec3(pose_arrow[0], pose_arrow[1], pose_robot[2]), r=None)
                 gymutil.draw_lines(sphere_geom_arrow, self.gym, self.viewer, self.envs[self.lookat_id], pose)
+    
+    def _draw_edge_mask(self):
+        """的可视化函数，在机器人周围绘制红色的球来显示边缘掩码为True的区域"""
+        if not hasattr(self, 'x_edge_mask') or self.x_edge_mask is None:
+            return
+
+        # 获取环境参数
+        border = self.terrain.cfg.border_size
+        h_scale = self.terrain.cfg.horizontal_scale
+        v_scale = self.terrain.cfg.vertical_scale
         
+        # 只在当前观察的机器人周围绘制，避免性能开销过大
+        i = self.lookat_id
+        base_pos = self.root_states[i, :3].cpu().numpy()
+        
+        # 确定绘制半径 (例如 1.5 米)
+        radius_m = 1.5
+        radius_px = int(radius_m / h_scale)
+        
+        # 计算当前机器人的网格坐标
+        cx = int((base_pos[0] + border) / h_scale)
+        cy = int((base_pos[1] + border) / h_scale)
+        
+        # 确定搜索范围
+        x_min = max(0, cx - radius_px)
+        x_max = min(self.x_edge_mask.shape[0], cx + radius_px)
+        y_min = max(0, cy - radius_px)
+        y_max = min(self.x_edge_mask.shape[1], cy + radius_px)
+        
+        # 提取局部掩码 (注意：x_edge_mask通常在GPU上，需要小心处理)
+        sub_mask = self.x_edge_mask[x_min:x_max, y_min:y_max]
+        
+        # 找到所有为True的索引 [N, 2]
+        indices = torch.nonzero(sub_mask)
+        
+        if indices.shape[0] == 0:
+            return
+
+        # 限制绘制点的数量以保持帧率
+        max_points = 300
+        if indices.shape[0] > max_points:
+            step = indices.shape[0] // max_points
+            indices = indices[::step]
+            
+        sphere_geom = gymutil.WireframeSphereGeometry(0.02, 4, 4, None, color=(1, 0, 0))
+        
+        # 获取索引数据到CPU进行循环绘制
+        indices_cpu = indices.cpu().numpy()
+        
+        for idx in range(indices_cpu.shape[0]):
+            # 局部坐标转回全局网格坐标
+            lx, ly = indices_cpu[idx]
+            gx = x_min + lx
+            gy = y_min + ly
+            
+            # 网格坐标转世界坐标
+            wx = gx * h_scale - border
+            wy = gy * h_scale - border
+            
+            # 获取该位置的地形高度，稍微抬高一点显示
+            z = self.height_samples[gx, gy].cpu().item() * v_scale
+            
+            pose = gymapi.Transform(gymapi.Vec3(wx, wy, z + 0.05), r=None)
+            gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], pose)
+
+    
+    
     def _draw_feet(self):
         if hasattr(self, 'feet_at_edge'):
             non_edge_geom = gymutil.WireframeSphereGeometry(0.02, 16, 16, None, color=(0, 1, 0))

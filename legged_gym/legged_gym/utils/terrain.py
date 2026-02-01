@@ -146,10 +146,17 @@ class Terrain:
         if self.type=="trimesh":
             print("Converting heightmap to trimesh...")
             if cfg.hf2mesh_method == "grid":
-                self.vertices, self.triangles, self.x_edge_mask = convert_heightfield_to_trimesh(   self.height_field_raw,
+                self.vertices, self.triangles, auto_edge_mask = convert_heightfield_to_trimesh(   self.height_field_raw,
                                                                                                 self.cfg.horizontal_scale,
                                                                                                 self.cfg.vertical_scale,
                                                                                                 self.cfg.slope_treshold)
+                # --- [新增/修改] 合并自动与手动掩码 ---
+                self.x_edge_mask = auto_edge_mask
+                if hasattr(self, 'x_edge_mask_manual'):
+                    # 取并集：只要是自动检测到的边缘 OR 手动标记的边缘，都计入
+                    self.x_edge_mask |= self.x_edge_mask_manual
+                
+                # 统一进行膨胀处理，使边缘变成一个可感知的区域 edge_width_thresh = 5cm
                 half_edge_width = int(self.cfg.edge_width_thresh / self.cfg.horizontal_scale)
                 structure = np.ones((half_edge_width*2+1, 1))
                 self.x_edge_mask = binary_dilation(self.x_edge_mask, structure=structure)
@@ -181,12 +188,12 @@ class Terrain:
     def curiculum(self, random=False, max_difficulty=False):
         for j in range(self.cfg.num_cols):
             for i in range(self.cfg.num_rows):
-                difficulty = i / (self.cfg.num_rows-1) 
+                difficulty = i / (self.cfg.num_rows-1)
                 choice = j / self.cfg.num_cols + 0.001
                 # print(f"Terrain choice={choice:.3f}, difficulty={difficulty:.3f}")
                 if random:
                     if max_difficulty:
-                        terrain = self.make_terrain(choice, np.random.uniform(1, 1.2))
+                        terrain = self.make_terrain(choice, np.random.uniform(0.99, 1))
                     else:
                         terrain = self.make_terrain(choice, np.random.uniform(0, 1))
                 else:
@@ -270,8 +277,6 @@ class Terrain:
 
             # step_width: difficulty=0时为0.4m，difficulty=1时为0.2m
             step_width = 0.4 - 0.2 * difficulty
-            if step_width < 0.17:
-                step_width = 0.17
             staircase_length = 10.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
 
@@ -373,8 +378,6 @@ class Terrain:
 
             # step_width: difficulty=0时为0.4m，difficulty=1时为0.2m
             step_width = 0.4 - 0.2 * difficulty
-            if step_width < 0.17:
-                step_width = 0.17
             staircase_length = 10.0  # 总楼梯区长度
             birth_area_length = 3  # 由 birth_area_length_px = 60 * 0.01 得到
 
@@ -493,6 +496,15 @@ class Terrain:
             self.heightsamples[start_x: end_x, start_y:end_y] = terrain.heightsamples
         else:
             self.heightsamples[start_x: end_x, start_y:end_y] = terrain.height_field_raw
+
+        # --- [新增] 合并边缘掩码 ---
+        # 如果全局掩码还未初始化（第一次调用时），先初始化为全 False
+        if not hasattr(self, 'x_edge_mask_manual'):
+            self.x_edge_mask_manual = np.zeros((self.tot_rows, self.tot_cols), dtype=bool)
+        
+        # 如果该子地形有手动标记的边缘，合入全局手动掩码
+        if hasattr(terrain, 'local_edge_mask'):
+            self.x_edge_mask_manual[start_x:end_x, start_y:end_y] |= terrain.local_edge_mask
 
         if hasattr(terrain, 'trimeshes') and terrain.trimeshes:
             # print(f">>> DEBUG: Found {len(terrain.trimeshes)} meshes from sub-terrain ({row}, {col}). Collecting them.")
@@ -878,11 +890,31 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
     heightsamples = terrain.height_field_raw.copy()
     heightsamples[:, :] = 0
     step_end_x_m = birth_area_length + step_width_m * num_steps
+
+    terrain.local_edge_mask = np.zeros_like(terrain.height_field_raw, dtype=bool)
+    terrain.local_edge_mask[current_x_pos_px - 1:current_x_pos_px, start_y:end_y] = True # 前缘
     for i in range(num_steps):
         if i == 0:
             current_height_m += step_height_first
         else:
             current_height_m += step_height_others
+
+        x_s, x_e = current_x_pos_px, current_x_pos_px + step_width_px
+        
+        # 只在台阶的前后两条线（X边缘）标记为边缘
+        # terrain.local_edge_mask[x_s:x_s+1, start_y:end_y] = True # 前缘
+        terrain.local_edge_mask[x_e-1:x_e, start_y:end_y] = True # 后缘
+        # 如果需要左右边缘惩罚：
+        terrain.local_edge_mask[x_s:x_e, start_y:start_y+1] = True
+        terrain.local_edge_mask[x_s:x_e, end_y-1:end_y] = True
+        # # --- 关键步骤：更新高度场记录 ---
+        # # 我们将台阶所在的矩形区域高度写入 height_field_raw
+        # # 这样在 Terrain 最终处理时，台阶的边界会产生巨大的梯度，从而被计入 x_edge_mask
+        # h_val = int(current_height_m / terrain.vertical_scale)
+        # x_s, x_e = current_x_pos_px, current_x_pos_px + step_width_px
+        
+        # # 写入高度场
+        # terrain.height_field_raw[x_s:x_e, 0 + start_y: width_px_for_roughness + start_y] = h_val
         
         center_x_m = (current_x_pos_px + step_width_px / 2.0) * terrain.horizontal_scale
         center_y_m = terrain_length_m / 2.0
@@ -937,6 +969,11 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
 
     # --- 5. 创建顶部平台 ---
     current_height_m += step_height_others
+    # h_top = int(current_height_m / terrain.vertical_scale)
+    # platform_width_px = min(staircase_length_px - current_x_pos_px, 6 * step_width_px)
+    
+    # terrain.height_field_raw[current_x_pos_px : current_x_pos_px + platform_width_px, 0 + start_y: width_px_for_roughness + start_y] = h_top
+    terrain.local_edge_mask[current_x_pos_px:current_x_pos_px+1, start_y:end_y] = True # 前缘
     platform_width_px = min(staircase_length_px - current_x_pos_px, 6 * step_width_px)
     platform_width_m = platform_width_px * terrain.horizontal_scale
 
