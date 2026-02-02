@@ -968,16 +968,37 @@ class LeggedRobot(BaseTask):
         self.reached_goal_ids = torch.norm(self.root_states[:, :2] - self.cur_goals[:, :2], dim=1) < self.cfg.env.next_goal_threshold
         self.reach_goal_timer[self.reached_goal_ids] += 1
 
+        # self.target_pos_rel = self.cur_goals[:, :2] - self.root_states[:, :2]
+        # self.next_target_pos_rel = self.next_goals[:, :2] - self.root_states[:, :2]
+
+        # norm = torch.norm(self.target_pos_rel, dim=-1, keepdim=True)
+        # target_vec_norm = self.target_pos_rel / (norm + 1e-5)
+        # self.target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
+
+        # norm = torch.norm(self.next_target_pos_rel, dim=-1, keepdim=True)
+        # target_vec_norm = self.next_target_pos_rel / (norm + 1e-5)
+        # self.next_target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
+
+        # 保持 target_pos_rel 为 2D 以兼容原有的速度跟踪奖励
         self.target_pos_rel = self.cur_goals[:, :2] - self.root_states[:, :2]
         self.next_target_pos_rel = self.next_goals[:, :2] - self.root_states[:, :2]
 
+        # 计算当前目标点的水平距离 (norm)
         norm = torch.norm(self.target_pos_rel, dim=-1, keepdim=True)
         target_vec_norm = self.target_pos_rel / (norm + 1e-5)
         self.target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
 
-        norm = torch.norm(self.next_target_pos_rel, dim=-1, keepdim=True)
-        target_vec_norm = self.next_target_pos_rel / (norm + 1e-5)
-        self.next_target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
+        # 计算下一个目标点的 Yaw (用于观察)
+        norm_next = torch.norm(self.next_target_pos_rel, dim=-1, keepdim=True)
+        target_vec_next_norm = self.next_target_pos_rel / (norm_next + 1e-5)
+        self.next_target_yaw = torch.atan2(target_vec_next_norm[:, 1], target_vec_next_norm[:, 0])
+
+        # --- 新增：计算 3D 俯仰引导角度 ---
+        # 计算当前机身与目标点的垂直高度差
+        dz = self.next_goals[:, 2] - (self.root_states[:, 2] - 0.4)
+        # target_pitch = atan2(高度差, 水平距离)
+        # 使用 squeeze(-1) 将 norm 从 (N, 1) 转为 (N,)
+        self.target_pitch = torch.atan2(dz, norm_next.squeeze(-1))
 
     def post_physics_step(self):
         """ check terminations, compute observations and rewards
@@ -1037,6 +1058,7 @@ class LeggedRobot(BaseTask):
                 self._draw_goals()
                 self._draw_feet()
                 self._draw_edge_mask()
+                self._draw_hollow_mask()  # 蓝色：空心板子高度
             if self.cfg.depth.use_camera:
                 window_name = "Depth Image"
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -1848,6 +1870,12 @@ class LeggedRobot(BaseTask):
         self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
         self.x_edge_mask = torch.tensor(self.terrain.x_edge_mask).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
 
+        # [新增] 将空心高度图传给 robot
+        if hasattr(self.terrain, 'hollow_height_map'):
+            self.hollow_height_map = torch.from_numpy(self.terrain.hollow_height_map).to(self.device)
+        else:
+            self.hollow_height_map = torch.zeros_like(self.x_edge_mask, dtype=torch.float)
+
     def attach_camera(self, i, env_handle, actor_handle):
         if self.cfg.depth.use_camera:
             config = self.cfg.depth
@@ -2057,6 +2085,59 @@ class LeggedRobot(BaseTask):
             self.env_origins[:, 1] = spacing * yy.flatten()[:self.num_envs]
             self.env_origins[:, 2] = 0.
 
+    def _draw_hollow_mask(self):
+        """可视化函数：在机器人周围绘制蓝色点阵，显示从地面到板子底部的空心惩罚区域"""
+        if not hasattr(self, 'hollow_height_map') or self.hollow_height_map is None:
+            return
+
+        border = self.terrain.cfg.border_size
+        h_scale = self.terrain.cfg.horizontal_scale
+        
+        i = self.lookat_id
+        base_pos = self.root_states[i, :3].cpu().numpy()
+        
+        # 绘制半径和范围
+        radius_m = 1.5
+        radius_px = int(radius_m / h_scale)
+        
+        cx = int((base_pos[0] + border) / h_scale)
+        cy = int((base_pos[1] + border) / h_scale)
+        
+        x_min = max(0, cx - radius_px)
+        x_max = min(self.hollow_height_map.shape[0], cx + radius_px)
+        y_min = max(0, cy - radius_px)
+        y_max = min(self.hollow_height_map.shape[1], cy + radius_px)
+        
+        sub_height_map = self.hollow_height_map[x_min:x_max, y_min:y_max]
+        indices = torch.nonzero(sub_height_map > 0.01)
+        
+        if indices.shape[0] == 0:
+            return
+
+        # 采样步长，防止点太多卡顿
+        stride = 5 
+        indices = indices[::stride]
+            
+        sphere_geom = gymutil.WireframeSphereGeometry(0.01, 4, 4, None, color=(0, 0, 1))
+        indices_cpu = indices.cpu().numpy()
+        
+        for idx in range(indices_cpu.shape[0]):
+            lx, ly = indices_cpu[idx]
+            gx, gy = x_min + lx, y_min + ly
+            
+            wx = gx * h_scale - border
+            wy = gy * h_scale - border
+            
+            # 获取板子高度
+            target_h = sub_height_map[lx, ly].item()
+            
+            # --- 核心修改：沿 Z 轴垂直绘制多个点 ---
+            # 每隔 0.1m 画一个点，从地面 0m 一直画到板子高度 target_h
+            z_steps = np.arange(0.0, target_h, 0.1) 
+            for wz in z_steps:
+                pose = gymapi.Transform(gymapi.Vec3(wx, wy, wz), r=None)
+                gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], pose)
+
     def _parse_cfg(self, cfg):
         self.dt = self.cfg.control.decimation * self.sim_params.dt
         self.obs_scales = self.cfg.normalization.obs_scales
@@ -2103,7 +2184,8 @@ class LeggedRobot(BaseTask):
         for i, goal in enumerate(goals):
             goal_xy = goal[:2] + self.terrain.cfg.border_size
             pts = (goal_xy/self.terrain.cfg.horizontal_scale).astype(int)
-            goal_z = self.height_samples[pts[0], pts[1]].cpu().item() * self.terrain.cfg.vertical_scale
+            # 使用传入的 goal[2] 直接作为高度，因为 hollow_stairs 已注入 3D goals
+            goal_z = goal[2] 
             pose = gymapi.Transform(gymapi.Vec3(goal[0], goal[1], goal_z), r=None)
             if i == self.cur_goal_idx[self.lookat_id].cpu().item():
                 gymutil.draw_lines(sphere_geom_cur, self.gym, self.viewer, self.envs[self.lookat_id], pose)
@@ -2113,22 +2195,44 @@ class LeggedRobot(BaseTask):
                 gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[self.lookat_id], pose)
         
         if not self.cfg.depth.use_camera:
+            # --- 绘制当前目标的 3D 引导箭头 ---
             sphere_geom_arrow = gymutil.WireframeSphereGeometry(0.02, 16, 16, None, color=(1, 0.35, 0.25))
             pose_robot = self.root_states[self.lookat_id, :3].cpu().numpy()
+            
+            # 获取当前环境的 target_pitch (弧度)
+            current_target_pitch = self.target_pitch[self.lookat_id].cpu().item()
+            
             for i in range(5):
                 norm = torch.norm(self.target_pos_rel, dim=-1, keepdim=True)
                 target_vec_norm = self.target_pos_rel / (norm + 1e-5)
-                pose_arrow = pose_robot[:2] + 0.1*(i+3) * target_vec_norm[self.lookat_id, :2].cpu().numpy()
-                pose = gymapi.Transform(gymapi.Vec3(pose_arrow[0], pose_arrow[1], pose_robot[2]), r=None)
+                
+                # 计算水平方向的位移
+                h_offset = 0.1 * (i + 3)
+                pose_arrow_xy = pose_robot[:2] + h_offset * target_vec_norm[self.lookat_id, :2].cpu().numpy()
+                
+                # 应用 Pitch 计算垂直高度：dz = h_offset * tan(pitch)
+                # 这样可视化出的连线斜率正好等于目标俯仰角
+                v_offset = h_offset * np.tan(current_target_pitch)
+                pose_z = pose_robot[2] + v_offset
+                
+                pose = gymapi.Transform(gymapi.Vec3(pose_arrow_xy[0], pose_arrow_xy[1], pose_z), r=None)
                 gymutil.draw_lines(sphere_geom_arrow, self.gym, self.viewer, self.envs[self.lookat_id], pose)
             
-            sphere_geom_arrow = gymutil.WireframeSphereGeometry(0.02, 16, 16, None, color=(0, 1, 0.5))
+            # --- 绘制下一个目标的 3D 引导箭头 (可选，逻辑相同) ---
+            sphere_geom_arrow_next = gymutil.WireframeSphereGeometry(0.02, 16, 16, None, color=(0, 1, 0.5))
             for i in range(5):
                 norm = torch.norm(self.next_target_pos_rel, dim=-1, keepdim=True)
                 target_vec_norm = self.next_target_pos_rel / (norm + 1e-5)
-                pose_arrow = pose_robot[:2] + 0.2*(i+3) * target_vec_norm[self.lookat_id, :2].cpu().numpy()
-                pose = gymapi.Transform(gymapi.Vec3(pose_arrow[0], pose_arrow[1], pose_robot[2]), r=None)
-                gymutil.draw_lines(sphere_geom_arrow, self.gym, self.viewer, self.envs[self.lookat_id], pose)
+                
+                h_offset_next = 0.2 * (i + 3)
+                pose_arrow_xy = pose_robot[:2] + h_offset_next * target_vec_norm[self.lookat_id, :2].cpu().numpy()
+                
+                # 计算高度偏移（指向下一个目标）
+                v_offset_next = h_offset_next * np.tan(current_target_pitch) # 这里可以换成 next_target_pitch
+                pose_z = pose_robot[2] + v_offset_next
+                
+                pose = gymapi.Transform(gymapi.Vec3(pose_arrow_xy[0], pose_arrow_xy[1], pose_z), r=None)
+                gymutil.draw_lines(sphere_geom_arrow_next, self.gym, self.viewer, self.envs[self.lookat_id], pose)
     
     def _draw_edge_mask(self):
         """的可视化函数，在机器人周围绘制红色的球来显示边缘掩码为True的区域"""
@@ -2195,7 +2299,6 @@ class LeggedRobot(BaseTask):
             gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], pose)
 
     
-    
     def _draw_feet(self):
         if hasattr(self, 'feet_at_edge'):
             non_edge_geom = gymutil.WireframeSphereGeometry(0.02, 16, 16, None, color=(0, 1, 0))
@@ -2229,7 +2332,8 @@ class LeggedRobot(BaseTask):
         return points
 
     def get_foot_contacts(self):
-        foot_contacts_bool = self.contact_forces[:, self.feet_indices, 2] > 10
+        # foot_contacts_bool = self.contact_forces[:, self.feet_indices, 2] > 10
+        print(self.contact_forces[:, self.feet_indices, 2])
         if self.cfg.env.include_foot_contacts:
             return foot_contacts_bool
         else:
@@ -2431,7 +2535,7 @@ class LeggedRobot(BaseTask):
         # allowed = (self.env_class == 17) | (self.env_class == 9)
         # rew[~allowed] *= 0.01
         # rew[self.env_class != 17] = 0.
-        rew[self.env_class == 9] *= 2
+        rew[self.env_class == 9] *= 5
         rew[self.env_class != 9] *= 0.1
         return rew
     
@@ -2442,6 +2546,27 @@ class LeggedRobot(BaseTask):
     def _reward_pitch(self):
         # 专门的 pitch 惩罚项（便于单独调权重）
         return torch.square(self.pitch)  # 或 torch.square(self.pitch)
+    
+    def _reward_tracking_pitch(self):
+        """ 引导机器人俯仰角正对 Waypoint，仅在距离目标点 1m 内生效 """
+        # 1. 计算当前目标点的水平距离
+        # 这里的 self.target_pos_rel 是在 _update_goals 中更新的 (dx, dy)
+        dist_xy = torch.norm(self.target_pos_rel, dim=-1)
+        
+        # 2. 判断距离：生成 1米范围掩码
+        # 只有距离小于 1.0m 的环境，mask 为 True (1.0)
+        mask = dist_xy < 1.0
+        mask2 = self.cur_goal_idx < self.cfg.terrain.num_goals - 1
+        mask = mask & mask2
+        
+        # 3. 计算当前的俯仰角误差
+        # self.target_pitch 是目标仰角，self.pitch 是当前机身仰角
+        pitch_error = torch.square(self.target_pitch - self.pitch)
+        
+        # 4. 计算奖励并应用掩码
+        # 距离大于 1m 的环境，由于乘以 mask.float()，最终奖励为 0
+        reward = torch.exp(-pitch_error / self.cfg.rewards.tracking_sigma)
+        return reward * mask.float()
 
     def _reward_dof_acc(self):
         return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
@@ -2506,6 +2631,8 @@ class LeggedRobot(BaseTask):
 
     def _reward_feet_contact_forces(self):
         # penalize high contact forces
+        # print(self.contact_forces[:, self.feet_indices, 2])
+        # print(torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1))
         return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
     
     def _reward_feet_air_time(self):
@@ -2518,7 +2645,7 @@ class LeggedRobot(BaseTask):
         self.feet_air_time += self.dt
         
         # 1. 原有的奖励：只在触地瞬间给予 (长步子奖励，碎步惩罚)
-        rew_airTime = torch.sum((self.feet_air_time - 0.5) * first_contact, dim=1) 
+        rew_airTime = torch.sum((self.feet_air_time - 0.3) * first_contact, dim=1) 
         rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command
         self.feet_air_time *= ~contact_filt
         mask = (self.commands[:, 0] > 0) & (self.base_lin_vel[:, 0] < 0)
@@ -2539,7 +2666,33 @@ class LeggedRobot(BaseTask):
         return (torch.abs(self.base_lin_vel[:, 0]) < 0.1) * (torch.abs(self.commands[:, 0]) > 0.1)
     
     def _reward_cur_goals(self):
+        # print(self.cur_goal_idx)
         return self.cur_goal_idx
+    
+    def _reward_feet_hollow(self):
+        """ 惩罚脚掉进空心楼梯板子下方的行为 """
+        # 1. 获取脚的 XY 像素索引
+        feet_pos_xy = ((self.rigid_body_states[:, self.feet_indices, :2] + self.terrain.cfg.border_size) / self.cfg.terrain.horizontal_scale).round().long()
+        feet_pos_xy[..., 0] = torch.clip(feet_pos_xy[..., 0], 0, self.hollow_height_map.shape[0]-1)
+        feet_pos_xy[..., 1] = torch.clip(feet_pos_xy[..., 1], 0, self.hollow_height_map.shape[1]-1)
+
+        # 2. 查询对应位置的台阶表面高度
+        # target_h 的 shape: (num_envs, 4)
+        target_h = self.hollow_height_map[feet_pos_xy[..., 0], feet_pos_xy[..., 1]]
+
+        # 3. 判定判定
+        # a. 该位置确实是空心台阶区域 (target_h > 0)
+        # b. 脚的高度明显低于台阶表面高度 (这里留 2cm 的容差，比如脚厚度或传感器误差)
+        # c. 脚当前有接触力（说明踩到了空洞底部的地面）
+        foot_z = self.feet_pos[:, :, 2]
+        
+        # 掉进下方的判定掩码
+        is_underneath = (target_h > 0.01) & (foot_z < (target_h - 0.02))
+        
+        # 只有当脚落地(接触力>1.0)且在板子下面时才惩罚
+        # punish_mask = is_underneath & (self.contact_forces[:, self.feet_indices, 2] > 1.0)
+        
+        return torch.sum(is_underneath.float(), dim=-1)
     
     # def _reward_no_move_when_command(self):
     #     # 取命令范围阈值

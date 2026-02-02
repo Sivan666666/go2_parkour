@@ -506,6 +506,14 @@ class Terrain:
         if hasattr(terrain, 'local_edge_mask'):
             self.x_edge_mask_manual[start_x:end_x, start_y:end_y] |= terrain.local_edge_mask
 
+        # [新增] 合并空心高度图
+        if not hasattr(self, 'hollow_height_map'):
+            # 创建一个跟大地图一样大的高度图
+            self.hollow_height_map = np.zeros((self.tot_rows, self.tot_cols), dtype=np.float32)
+        
+        if hasattr(terrain, 'local_hollow_heights'):
+            self.hollow_height_map[start_x:end_x, start_y:end_y] = terrain.local_hollow_heights
+
         if hasattr(terrain, 'trimeshes') and terrain.trimeshes:
             # print(f">>> DEBUG: Found {len(terrain.trimeshes)} meshes from sub-terrain ({row}, {col}). Collecting them.")
             
@@ -893,6 +901,8 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
 
     terrain.local_edge_mask = np.zeros_like(terrain.height_field_raw, dtype=bool)
     terrain.local_edge_mask[current_x_pos_px - 1:current_x_pos_px, start_y:end_y] = True # 前缘
+    terrain.local_hollow_heights = np.zeros_like(terrain.height_field_raw, dtype=np.float32)
+
     for i in range(num_steps):
         if i == 0:
             current_height_m += step_height_first
@@ -901,6 +911,7 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
 
         x_s, x_e = current_x_pos_px, current_x_pos_px + step_width_px
         
+        terrain.local_hollow_heights[x_s:x_e, start_y:end_y] = current_height_m
         # 只在台阶的前后两条线（X边缘）标记为边缘
         # terrain.local_edge_mask[x_s:x_s+1, start_y:end_y] = True # 前缘
         terrain.local_edge_mask[x_e-1:x_e, start_y:end_y] = True # 后缘
@@ -973,6 +984,7 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
     # platform_width_px = min(staircase_length_px - current_x_pos_px, 6 * step_width_px)
     
     # terrain.height_field_raw[current_x_pos_px : current_x_pos_px + platform_width_px, 0 + start_y: width_px_for_roughness + start_y] = h_top
+    
     terrain.local_edge_mask[current_x_pos_px:current_x_pos_px+1, start_y:end_y] = True # 前缘
     platform_width_px = min(staircase_length_px - current_x_pos_px, 6 * step_width_px)
     platform_width_m = platform_width_px * terrain.horizontal_scale
@@ -980,6 +992,8 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
     platform_center_x_m = (current_x_pos_px + platform_width_px / 2.0) * terrain.horizontal_scale
     platform_center_y_m = terrain_length_m / 2.0
     platform_center_z_m = current_height_m - step_thickness / 2.0
+
+    terrain.local_hollow_heights[current_x_pos_px:current_x_pos_px + 5 , start_y:end_y] = current_height_m
 
     platform_resolution = (
         np.ceil(platform_width_px).astype(int),
@@ -1027,7 +1041,7 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
 
     # goals_m.append([platform_center_x_m, platform_center_y_m, current_height_m])
     # 设置最后一个waypoint在楼梯的前面一点点
-    goals_m.append([(current_x_pos_px + 2 * step_width_px) * terrain.horizontal_scale, platform_center_y_m, current_height_m])
+    goals_m.append([(current_x_pos_px + 4 * step_width_px) * terrain.horizontal_scale, platform_center_y_m, current_height_m])
 
 
     # ------  6.加入栏杆和后部长方形横杆组和叉型  --------
