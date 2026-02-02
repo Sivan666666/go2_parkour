@@ -3,7 +3,7 @@ import torch.nn as nn
 import sys
 import torchvision
 from transformers import ViTModel, ViTConfig
-
+from .network import LSTM_SRU_Gate
 # ==========================================
 # 🔥 LocoTransformer 架构 (论文实现)
 # ==========================================
@@ -868,6 +868,124 @@ class DepthOnlyFCBackbone58x87_Original(nn.Module):
 
         return latent
 
+class DepthBackbone_SpatialPatches(nn.Module):
+    """
+    修改后的深度图骨干网络：输出空间 Patch 特征 [Batch, 16, 64]
+    而非单个全局向量，以支持 Cross-Attention 检索空间信息。
+    """
+    def __init__(self, prop_dim, scandots_output_dim, hidden_state_dim, output_activation=None, num_frames=1):
+        super().__init__()
+        self.num_frames = num_frames
+        activation = nn.ELU()
+        
+        # 提取空间特征的卷积层
+        self.feature_extractor = nn.Sequential(
+            # [1, 58, 87] -> [32, 27, 42]
+            nn.Conv2d(in_channels=self.num_frames, out_channels=32, kernel_size=5, stride=2),
+            activation,
+            # [32, 27, 42] -> [64, 13, 20]
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=2),
+            activation,
+            # 关键：自适应池化到 4x4 的网格
+            nn.AdaptiveAvgPool2d((4, 4)) # 输出 shape: [batch, 64, 4, 4]
+        )
+        
+        # 投影层，将通道数映射到 Attention 维度 (如 64)
+        self.token_dim = 64
+        self.projection = nn.Linear(64, self.token_dim)
+        
+        if output_activation == "tanh":
+            self.output_activation = nn.Tanh()
+        else:
+            self.output_activation = activation
+
+    def forward(self, images: torch.Tensor):
+        # images: [batch, 58, 87]
+        x = images.unsqueeze(1) # [batch, 1, 58, 87]
+        x = self.feature_extractor(x) # [batch, 64, 4, 4]
+        
+        # 展平空间维度：[batch, 64, 16] -> 转置：[batch, 16, 64]
+        x = x.flatten(2).transpose(1, 2)
+        
+        # 投影并激活
+        x = self.output_activation(self.projection(x))
+        return x # 返回 16 个 Patch Token
+    
+# 假设 LSTM_SRU_Gate 已从 lstm_sru_gate.py 导入
+# from lstm_sru_gate import LSTM_SRU_Gate
+
+class RecurrentDepthBackbone_SRU(nn.Module):
+    def __init__(self, base_backbone, env_cfg) -> None:
+        super().__init__()
+        activation = nn.ELU()
+        last_activation = nn.Tanh()
+        self.base_backbone = base_backbone
+        
+        # 获取维度
+        self.proprio_dim = 53 if env_cfg is None else env_cfg.env.n_proprio
+        self.embed_dim = 64  # 与上面 backbone 的 token_dim 对应
+        self.rnn_hidden = 512
+        
+        # 1. Proprioception 编码器 (将本体感知编码为 Query)
+        self.proprio_encoder = nn.Sequential(
+            nn.Linear(self.proprio_dim, 128),
+            activation,
+            nn.Linear(128, self.embed_dim)
+        )
+        
+        # 2. 两层 Cross-Attention
+        # Query: Proprio (1 token), Key/Value: Depth Patches (16 tokens)
+        self.attn_layers = nn.ModuleList([
+            nn.MultiheadAttention(embed_dim=self.embed_dim, num_heads=4, batch_first=True)
+            for _ in range(2)
+        ])
+        self.norms = nn.ModuleList([nn.LayerNorm(self.embed_dim) for _ in range(2)])
+        
+        # 3. LSTM-SRU-Gate (时序记忆模块)
+        self.rnn = LSTM_SRU_Gate(
+            input_size=self.embed_dim, 
+            hidden_size=self.rnn_hidden, 
+            num_layers=2, 
+            batch_first=True
+        )
+        
+        # 4. 输出 MLP
+        self.output_mlp = nn.Sequential(
+            nn.Linear(self.rnn_hidden, 128),
+            activation,
+            nn.Linear(128, 34), # 对应原本的 32+2 维输出
+            last_activation
+        )
+        self.hidden_states = None
+
+    def forward(self, depth_image, proprioception):
+        # A. 获取深度图 Patch: [batch, 16, 64]
+        depth_patches = self.base_backbone(depth_image)
+        
+        # B. 获取本体感知 Query: [batch, 1, 64]
+        proprio_query = self.proprio_encoder(proprioception).unsqueeze(1)
+        
+        # C. 两次 Cross-Attention 处理
+        x = proprio_query
+        for i in range(2):
+            # Query 来自 proprio, Key/Value 来自 depth patches
+            attn_out, _ = self.attn_layers[i](query=x, key=depth_patches, value=depth_patches)
+            x = self.norms[i](x + attn_out) # 残差连接 + 层归一化
+            
+        # D. LSTM-SRU-Gate (记忆模块)
+        # x shape: [batch, 1, 64]
+        rnn_out, self.hidden_states = self.rnn(x, self.hidden_states)
+        
+        # E. 映射到最终输出: [batch, 34]
+        output = self.output_mlp(rnn_out.squeeze(1))
+        return output
+
+    def detach_hidden_states(self):
+        if self.hidden_states is not None:
+            # SRU 的 hidden_states 是 (h, c) 元组
+            h, c = self.hidden_states
+            self.hidden_states = (h.detach().clone(), c.detach().clone())
+
 # # 使用别名保持兼容性
 # RecurrentDepthBackbone = RecurrentDepthBackbone_LocoTransformer
 # DepthOnlyFCBackbone58x87 = DepthBackboneLocoTransformer
@@ -878,5 +996,8 @@ class DepthOnlyFCBackbone58x87_Original(nn.Module):
 # RecurrentDepthBackbone = RecurrentDepthBackbone_Attention
 # DepthOnlyFCBackbone58x87 = DepthResNetBackbone
 
-RecurrentDepthBackbone = RecurrentDepthBackbone_Original
-DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original
+# RecurrentDepthBackbone = RecurrentDepthBackbone_Original
+# DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original
+
+RecurrentDepthBackbone = RecurrentDepthBackbone_SRU
+DepthOnlyFCBackbone58x87 = DepthBackbone_SpatialPatches
