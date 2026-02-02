@@ -200,7 +200,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
             delta_torques = -1.0e-7
             torques = -0.00001
             # hip_pos = -0.5
-            hip_pos = -0.7
+            hip_pos = -0.8
             smoothness = -0.001
             dof_error = -0.08
             feet_stumble = -1

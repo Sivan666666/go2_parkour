@@ -2561,7 +2561,10 @@ class LeggedRobot(BaseTask):
         
         # 3. 计算当前的俯仰角误差
         # self.target_pitch 是目标仰角，self.pitch 是当前机身仰角
-        pitch_error = torch.square(self.target_pitch - self.pitch)
+        # print("self.target_pitch:", self.target_pitch)
+        # print("self.pitch:", self.pitch)
+        # 如果是-的号 那就符号不对 所以改成加号
+        pitch_error = torch.square(self.target_pitch + self.pitch)
         
         # 4. 计算奖励并应用掩码
         # 距离大于 1m 的环境，由于乘以 mask.float()，最终奖励为 0
