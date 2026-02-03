@@ -1195,7 +1195,6 @@ class LeggedRobot(BaseTask):
                         break
             
             # 4. 将奖励累加到对应的 Critic 通道
-            # print(group_idx, name, rew)
             self.rew_buf[:, group_idx] += rew
             # 5. 依然记录在 episode_sums 中用于日志打印
             self.episode_sums[name] += rew

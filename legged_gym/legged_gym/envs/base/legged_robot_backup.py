@@ -600,11 +600,6 @@ class LeggedRobot(BaseTask):
         self.init_done = False
         self._parse_cfg(self.cfg)
 
-        ### ========================================== ###
-        # 修改：初始化奖励组数量，从配置中读取，默认为1
-        self.num_reward_groups = getattr(self.cfg.rewards, "num_reward_groups", 1)
-        ### ========================================== ###
-
         self._obs_layout_printed = False  # 首次打印标志
         # 🔥 初始化柏林噪声生成器
         self.perlin_time_offset = 0.0
@@ -723,10 +718,7 @@ class LeggedRobot(BaseTask):
             self.extras["depth"] = self.depth_buffer[:, -2]  # have already selected last one
         else:
             self.extras["depth"] = None
-        ### ========================================== ###
-        # 修改：返回多维的 self.rew_buf (num_envs, num_reward_groups)
         return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
-        ### ========================================== ###
 
     def get_history_observations(self):
         return self.obs_history_buf
@@ -1174,41 +1166,18 @@ class LeggedRobot(BaseTask):
             adds each terms to the episode sums and to the total reward
         """
         self.rew_buf[:] = 0.
-
-        # 假设奖励项到 Critic 组的映射在配置中定义
-        # 例如：self.cfg.rewards.reward_container = {"group_0": ["lin_vel", ...], "group_1": ["torques", ...]}
-        # 如果未定义，则默认所有奖励项都加到第一组 (Index 0)
-        reward_container = getattr(self.cfg.rewards, "reward_container", None)
-
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
-            # 计算单项奖励值（已在 _prepare_reward_function 中乘过 dt）
             rew = self.reward_functions[i]() * self.reward_scales[name]
-            
-            # 3. 确定该奖励项属于哪个 Critic 组
-            group_idx = 0 # 默认为第0组
-            if reward_container is not None:
-                for idx_str, items in reward_container.items():
-                    if name in items:
-                        # 从 "group_0" 字符串中提取索引数字 0
-                        group_idx = int(idx_str.split('_')[-1])
-                        break
-            
-            # 4. 将奖励累加到对应的 Critic 通道
-            # print(group_idx, name, rew)
-            self.rew_buf[:, group_idx] += rew
-            # 5. 依然记录在 episode_sums 中用于日志打印
+            self.rew_buf += rew
             self.episode_sums[name] += rew
-
-        # 限制为正向奖励逻辑（如果开启）
         if self.cfg.rewards.only_positive_rewards:
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
         
-        # 7. 处理终端奖励 (Termination)
+        # add termination reward after clipping
         if "termination" in self.reward_scales:
             rew = self._reward_termination() * self.reward_scales["termination"]
-            # 终端奖励通常可以加到所有 Critic 组，或者特定的任务组（如 group 0）
-            self.rew_buf[:, 0] += rew
+            self.rew_buf += rew
             self.episode_sums["termination"] += rew
     
     def _get_noise_scale_vec(self, cfg):
@@ -1700,12 +1669,6 @@ class LeggedRobot(BaseTask):
         # initialize some data used later on
         self.common_step_counter = 0
         self.extras = {}
-
-        ### ========================================== ###
-        # 修改：将 rew_buf 修改为 (num_envs, num_reward_groups) 形状
-        self.rew_buf = torch.zeros(self.num_envs, self.num_reward_groups, device=self.device, dtype=torch.float)
-        ### ========================================== ###
-
         self.noise_scale_vec = self._get_noise_scale_vec(self.cfg)
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
@@ -1794,11 +1757,9 @@ class LeggedRobot(BaseTask):
             name = '_reward_' + name
             self.reward_functions.append(getattr(self, name))
 
-        ### ========================================== ###
-        # 修改：episode_sums 依然是按名称统计各分项，不改变维度，方便日志查看
+        # reward episode sums
         self.episode_sums = {name: torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
                              for name in self.reward_scales.keys()}
-        ### ========================================== ###
 
     def _create_ground_plane(self):
         """ Adds a ground plane to the simulation, sets friction and restitution based on the cfg.
@@ -1828,6 +1789,26 @@ class LeggedRobot(BaseTask):
 
         self.gym.add_heightfield(self.sim, self.terrain.heightsamples.flatten(order='C'), hf_params)
         self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
+
+    # def _create_trimesh(self):
+    #     """ Adds a triangle mesh terrain to the simulation, sets parameters based on the cfg.
+    #         Very slow when horizontal_scale is small
+    #     """
+    #     tm_params = gymapi.TriangleMeshParams()
+    #     tm_params.nb_vertices = self.terrain.vertices.shape[0]
+    #     tm_params.nb_triangles = self.terrain.triangles.shape[0]
+
+    #     tm_params.transform.p.x = -self.terrain.cfg.border_size 
+    #     tm_params.transform.p.y = -self.terrain.cfg.border_size
+    #     tm_params.transform.p.z = 0.0
+    #     tm_params.static_friction = self.cfg.terrain.static_friction
+    #     tm_params.dynamic_friction = self.cfg.terrain.dynamic_friction
+    #     tm_params.restitution = self.cfg.terrain.restitution
+    #     print("Adding trimesh to simulation...")
+    #     self.gym.add_triangle_mesh(self.sim, self.terrain.vertices.flatten(order='C'), self.terrain.triangles.flatten(order='C'), tm_params)  
+    #     print("Trimesh added")
+    #     self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
+    #     self.x_edge_mask = torch.tensor(self.terrain.x_edge_mask).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
 
     def _create_trimesh(self):
         """ Adds a triangle mesh terrain to the simulation, sets parameters based on the cfg.

@@ -67,7 +67,6 @@ class OnPolicyRunner:
         ### ========================================== ###
         # 修改：从配置中获取奖励组（Critics）的数量，默认为 1
         self.num_reward_groups = self.cfg.get("num_reward_groups", 1)
-        self.num_reward_groups = 2
         ### ========================================== ###
 
         print("Using MLP and Priviliged Env encoder ActorCritic structure")
@@ -188,15 +187,9 @@ class OnPolicyRunner:
                     # 修改：如果是多奖励流，聚合（求和）用于日志记录
                     if rewards.dim() > 1 and rewards.shape[1] > 1:
                         reward_agg = rewards.sum(dim=-1)
-                        # print("Aggregating rewards for logging...")
-                        # print(reward_agg)
                     else:
                         reward_agg = rewards.squeeze(-1)
                     ### ========================================== ###
-
-                    # print(rewards.shape)
-                    # print(reward_agg.shape)
-                    # print(cur_reward_sum.shape)
                     
                     if self.log_dir is not None:
                         if 'episode' in infos:
@@ -206,14 +199,11 @@ class OnPolicyRunner:
                         cur_reward_sum += reward_agg
                         ### ========================================== ###
                         cur_episode_length += 1
-
-                        # print(cur_reward_sum)
                         
                         new_ids = (dones > 0).nonzero(as_tuple=False)
                         if new_ids.numel() > 0:
-                            rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
-                            # print("rewbuffer:", rewbuffer)
-                            lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
+                            rewbuffer.extend(cur_reward_sum[new_ids].cpu().numpy().tolist())
+                            lenbuffer.extend(cur_episode_length[new_ids].cpu().numpy().tolist())
                             cur_reward_sum[new_ids] = 0
                             cur_episode_length[new_ids] = 0
 
@@ -444,7 +434,7 @@ class OnPolicyRunner:
         mean_std = self.alg.actor_critic.std.mean()
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs['collection_time'] + locs['learn_time']))
 
-        wandb_dict['Loss/value_function'] = locs['mean_value_loss']
+        wandb_dict['Loss/value_function'] = ['mean_value_loss']
         wandb_dict['Loss/surrogate'] = locs['mean_surrogate_loss']
         wandb_dict['Loss/estimator'] = locs['mean_estimator_loss']
         wandb_dict['Loss/hist_latent_loss'] = locs['mean_hist_latent_loss']
@@ -461,9 +451,9 @@ class OnPolicyRunner:
         wandb_dict['Perf/learning_time'] = locs['learn_time']
         if len(locs['rewbuffer']) > 0:
             wandb_dict['Train/mean_reward'] = statistics.mean(locs['rewbuffer'])
-            # wandb_dict['Train/mean_reward_explr'] = statistics.mean(locs['rew_explr_buffer'])
-            #wandb_dict['Train/mean_reward_task'] = wandb_dict['Train/mean_reward'] - wandb_dict['Train/mean_reward_explr']
-            # wandb_dict['Train/mean_reward_entropy'] = statistics.mean(locs['rew_entropy_buffer'])
+            wandb_dict['Train/mean_reward_explr'] = statistics.mean(locs['rew_explr_buffer'])
+            wandb_dict['Train/mean_reward_task'] = wandb_dict['Train/mean_reward'] - wandb_dict['Train/mean_reward_explr']
+            wandb_dict['Train/mean_reward_entropy'] = statistics.mean(locs['rew_entropy_buffer'])
             wandb_dict['Train/mean_episode_length'] = statistics.mean(locs['lenbuffer'])
             # wandb_dict['Train/mean_reward/time', statistics.mean(locs['rewbuffer']), self.tot_time)
             # wandb_dict['Train/mean_episode_length/time', statistics.mean(locs['lenbuffer']), self.tot_time)
@@ -483,9 +473,9 @@ class OnPolicyRunner:
                           f"""{'Discriminator accuracy:':>{pad}} {locs['mean_disc_acc']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
                           f"""{'Mean reward (total):':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
-                          #f"""{'Mean reward (task):':>{pad}} {statistics.mean(locs['rewbuffer']) - statistics.mean(locs['rew_explr_buffer']):.2f}\n"""
-                        #   f"""{'Mean reward (exploration):':>{pad}} {statistics.mean(locs['rew_explr_buffer']):.2f}\n"""
-                        #   f"""{'Mean reward (entropy):':>{pad}} {statistics.mean(locs['rew_entropy_buffer']):.2f}\n"""
+                          f"""{'Mean reward (task):':>{pad}} {statistics.mean(locs['rewbuffer']) - statistics.mean(locs['rew_explr_buffer']):.2f}\n"""
+                          f"""{'Mean reward (exploration):':>{pad}} {statistics.mean(locs['rew_explr_buffer']):.2f}\n"""
+                          f"""{'Mean reward (entropy):':>{pad}} {statistics.mean(locs['rew_entropy_buffer']):.2f}\n"""
                           f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n""")
                         #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
                         #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")

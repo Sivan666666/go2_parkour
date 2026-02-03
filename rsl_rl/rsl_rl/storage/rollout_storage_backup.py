@@ -30,11 +30,6 @@
 
 import torch
 import numpy as np
-### ========================================== ###
-# 新增：导入配置相关的库
-import yaml
-import os 
-### ========================================== ###
 
 from rsl_rl.utils import split_and_pad_trajectories
 
@@ -54,19 +49,13 @@ class RolloutStorage:
         def clear(self):
             self.__init__()
 
-    ### ========================================== ###
-    # 修改：初始化增加 num_reward_groups 参数
-    def __init__(self, num_envs, num_transitions_per_env, obs_shape, privileged_obs_shape, actions_shape, device='cpu', num_reward_groups=1):
+    def __init__(self, num_envs, num_transitions_per_env, obs_shape, privileged_obs_shape, actions_shape, device='cpu'):
 
         self.device = device
 
         self.obs_shape = obs_shape
         self.privileged_obs_shape = privileged_obs_shape
         self.actions_shape = actions_shape
-        num_reward_groups = 2
-        self.num_reward_groups = num_reward_groups
-    ### ========================================== ###
-
 
         # Core
         self.observations = torch.zeros(num_transitions_per_env, num_envs, *obs_shape, device=self.device)
@@ -75,21 +64,15 @@ class RolloutStorage:
             self.privileged_observations = torch.zeros(num_transitions_per_env, num_envs, *privileged_obs_shape, device=self.device)
         else:
             self.privileged_observations = None
-        ### ========================================== ###
-        # 修改：rewards 维度从 1 改为 num_reward_groups
-        self.rewards = torch.zeros(num_transitions_per_env, num_envs, num_reward_groups, device=self.device)
-        ### ========================================== ###
+        self.rewards = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
         self.actions = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
         self.dones = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device).byte()
 
         # For PPO
         self.actions_log_prob = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
-        ### ========================================== ###
-        # 修改：values, returns, advantages 适配 Multi-Critic 维度
-        self.values = torch.zeros(num_transitions_per_env, num_envs, num_reward_groups, device=self.device)
-        self.returns = torch.zeros(num_transitions_per_env, num_envs, num_reward_groups, device=self.device)
-        self.advantages = torch.zeros(num_transitions_per_env, num_envs, device=self.device) # 最终聚合后的优势是 1 维
-        ### ========================================== ###
+        self.values = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+        self.returns = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+        self.advantages = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
         self.mu = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
         self.sigma = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
 
@@ -105,24 +88,17 @@ class RolloutStorage:
     def add_transitions(self, transition: Transition):
         if self.step >= self.num_transitions_per_env:
             raise AssertionError("Rollout buffer overflow")
-        ### ========================================== ###
-        # 修改：适配 transition 为字典(dict)的情况
-        # 将原来的 transition.observations 改为 transition["observations"]，以此类推
-        self.observations[self.step].copy_(transition["observations"])
-        if self.privileged_observations is not None: 
-            self.privileged_observations[self.step].copy_(transition["critic_observations"])
-        self.actions[self.step].copy_(transition["actions"])
-        ### ========================================== ###
-        # 适配多维度奖励的拷贝 (Multi-Critic)
-        self.rewards[self.step].copy_(transition["rewards"].view(self.num_envs, -1))
-        self.values[self.step].copy_(transition["values"])
-        ### ========================================== ###
-        self.dones[self.step].copy_(transition["dones"].view(-1, 1))
-        self.actions_log_prob[self.step].copy_(transition["actions_log_prob"].view(-1, 1))
-        self.mu[self.step].copy_(transition["action_mean"])
-        self.sigma[self.step].copy_(transition["action_sigma"])
+        self.observations[self.step].copy_(transition.observations)
+        if self.privileged_observations is not None: self.privileged_observations[self.step].copy_(transition.critic_observations)
+        self.actions[self.step].copy_(transition.actions)
+        self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
+        self.dones[self.step].copy_(transition.dones.view(-1, 1))
+        self.values[self.step].copy_(transition.values)
+        self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
+        self.mu[self.step].copy_(transition.action_mean)
+        self.sigma[self.step].copy_(transition.action_sigma)
 
-        self._save_hidden_states(transition["hidden_states"])
+        self._save_hidden_states(transition.hidden_states)
         self.step += 1
 
     def _save_hidden_states(self, hidden_states):
@@ -145,41 +121,21 @@ class RolloutStorage:
     def clear(self):
         self.step = 0
 
-    ### ========================================== ###
-    # 修改：适配 Multi-Critic 的回报与优势计算
     def compute_returns(self, last_values, gamma, lam):
-        # last_values shape: (num_envs, num_reward_groups)
-        advantage = torch.zeros_like(last_values)
+        advantage = 0
         for step in reversed(range(self.num_transitions_per_env)):
             if step == self.num_transitions_per_env - 1:
                 next_values = last_values
             else:
                 next_values = self.values[step + 1]
-            
-            # 扩展 dones 以匹配奖励组维度
-            next_is_not_terminal = 1.0 - self.dones[step].float().expand(-1, self.num_reward_groups)
-            
-            # 计算每个奖励组的 TD error
+            next_is_not_terminal = 1.0 - self.dones[step].float()
             delta = self.rewards[step] + next_is_not_terminal * gamma * next_values - self.values[step]
             advantage = delta + next_is_not_terminal * gamma * lam * advantage
             self.returns[step] = advantage + self.values[step]
 
-        # 优势聚合逻辑：针对每个奖励组独立标准化并按权重求和
-        # 此处可以根据您的 param_config.yaml 读取 alpha 权重
-        # 默认示例：0.5/0.5
-        alpha = [0.5, 0.5] 
-        
-        advantages_mc = torch.zeros(self.num_transitions_per_env, self.num_envs, device=self.device)
-
-        for g in range(self.num_reward_groups):
-            adv_g = self.returns[:, :, g] - self.values[:, :, g]
-            # 组内标准化
-            normalized_adv_g = (adv_g - adv_g.mean()) / (adv_g.std() + 1e-8)
-            # 加权累加
-            advantages_mc += alpha[g] * normalized_adv_g
-
-        self.advantages = advantages_mc
-    ### ========================================== ###
+        # Compute and normalize the advantages
+        self.advantages = self.returns - self.values
+        self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
 
     def get_statistics(self):
         done = self.dones

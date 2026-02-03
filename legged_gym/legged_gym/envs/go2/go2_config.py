@@ -183,11 +183,48 @@ class Go2RoughCfg( LeggedRobotCfg ):
         soft_dof_pos_limit = 0.9
         base_height_target = 0.3
         max_contact_force = 200.
+
+        ### ========================================== ###
+        # 修改 1：定义 Critic 组的数量（需与 actor_critic_multi 中的 num_critics 对齐）
+        num_reward_groups = 2 
+        
+        # 修改 2：定义奖励分配容器
+        # 键名格式必须为 "group_x"，值是该组包含的奖励函数名列表
+        reward_container = {
+            "group_0": [
+                "tracking_goal_vel", 
+                "tracking_ang_vel", 
+                "tracking_pitch",
+                "cur_goals"
+            ],
+            "group_1": [
+                "lin_vel_z",
+                "ang_vel_xy",
+                "orientation",
+                "dof_acc",
+                "collision",
+                "action_rate",
+                "delta_torques",
+                "torques",
+                "hip_pos",
+                "smoothness",
+                "dof_error",
+                "feet_stumble",
+                "feet_edge",
+                "feet_hollow",
+                "feet_contact_forces",
+                "roll",
+                "pitch",
+                "base_height"
+            ]
+        }
+        ### ========================================== ###
         class scales:
             # tracking rewards
             tracking_goal_vel = 2.5
             tracking_ang_vel = 0.5
             tracking_pitch = 0.5
+            cur_goals = 0.1
             # tracking_lin_vel = 0.25
             # tracking_yaw = 0.05
             # regularization rewards
@@ -214,7 +251,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
             
             # 根据HIMLOCO新加的奖励函数
             base_height = -0.2
-            cur_goals = 0.1
+            
 
     
 

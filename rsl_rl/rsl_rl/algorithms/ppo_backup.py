@@ -130,11 +130,8 @@ class PPO:
             self.depth_actor = depth_actor
             self.depth_actor_optimizer = optim.Adam([*self.depth_actor.parameters(), *self.depth_encoder.parameters()], lr=depth_encoder_paras["learning_rate"])
 
-    ### ========================================== ###
-    # 修改：增加 num_reward_groups 参数传递给 RolloutStorage
-    def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape, num_reward_groups=1):
-        self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape, self.device, num_reward_groups=num_reward_groups)
-    ### ========================================== ###
+    def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
+        self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape,  critic_obs_shape, action_shape, self.device)
 
     def test_mode(self):
         self.actor_critic.test()
@@ -142,69 +139,45 @@ class PPO:
     def train_mode(self):
         self.actor_critic.train()
 
-    ### ========================================== ###
-    # 修改：act 方法返回 actions 和包含所有中间变量的 transition 字典
     def act(self, obs, critic_obs, info, hist_encoding=False):
-        hidden_states = None
         if self.actor_critic.is_recurrent:
-            hidden_states = self.actor_critic.get_hidden_states()
-        
-        # 处理估计状态逻辑
-        if self.train_with_estimated_states:
+            self.transition.hidden_states = self.actor_critic.get_hidden_states()
+        # Compute the actions and values, use proprio to compute estimated priv_states then actions, but store true priv_states
+        if self.train_with_estimated_states: #True
             obs_est = obs.clone()
             priv_states_estimated = self.estimator(obs_est[:, :self.num_prop])
             obs_est[:, self.num_prop+self.num_scan:self.num_prop+self.num_scan+self.priv_states_dim] = priv_states_estimated
-            actions = self.actor_critic.act(obs_est, hist_encoding).detach()
+            self.transition.actions = self.actor_critic.act(obs_est, hist_encoding).detach()
         else:
-            actions = self.actor_critic.act(obs, hist_encoding).detach()
+            self.transition.actions = self.actor_critic.act(obs, hist_encoding).detach()
 
-        # 计算 Multi-Critic 的 values (shape: [num_envs, num_critics])
-        values = self.actor_critic.evaluate(critic_obs).detach()
-        actions_log_prob = self.actor_critic.get_actions_log_prob(actions).detach()
-        action_mean = self.actor_critic.action_mean.detach()
-        action_sigma = self.actor_critic.action_std.detach()
+        self.transition.values = self.actor_critic.evaluate(critic_obs).detach()
+        self.transition.actions_log_prob = self.actor_critic.get_actions_log_prob(self.transition.actions).detach()
+        self.transition.action_mean = self.actor_critic.action_mean.detach()
+        self.transition.action_sigma = self.actor_critic.action_std.detach()
+        self.transition.observations = obs
+        self.transition.critic_observations = critic_obs
 
-        # 构建 transition 字典
-        transition = {
-            'observations': obs,
-            'critic_observations': critic_obs,
-            'actions': actions,
-            'values': values,
-            'actions_log_prob': actions_log_prob,
-            'action_mean': action_mean,
-            'action_sigma': action_sigma,
-            'hidden_states': hidden_states
-        }
-        
-        return actions, transition
-    ### ========================================== ###
+        return self.transition.actions
     
-    ### ========================================== ###
-    # 修改：process_env_step 接收 transition 字典并处理多维奖励
-    def process_env_step(self, transition, rewards, dones, infos):
-        # 存入奖励和 Done 信号
-        # 注意：对于 Multi-Critic，rewards 形状通常已经是 [num_envs, num_critics]
-        transition['rewards'] = rewards.clone()
-        transition['dones'] = dones
-        
-        # 适配多维度 values 的 bootstrapping
-        if 'time_outs' in infos:
-            # 扩展 time_outs 维度以匹配 [num_envs, num_critics]
-            timeout_mask = infos['time_outs'].unsqueeze(1).to(self.device)
-            transition['rewards'] += self.gamma * transition['values'] * timeout_mask
+    def process_env_step(self, rewards, dones, infos):
+        rewards_total = rewards.clone()
 
-        # 调用存储器的 add_transitions (需确保存储器支持接收字典输入)
-        self.storage.add_transitions(transition)
+        self.transition.rewards = rewards_total.clone()
+        self.transition.dones = dones
+        # Bootstrapping on time outs
+        if 'time_outs' in infos:
+            self.transition.rewards += self.gamma * torch.squeeze(self.transition.values * infos['time_outs'].unsqueeze(1).to(self.device), 1)
+
+        # Record the transition
+        self.storage.add_transitions(self.transition)
+        self.transition.clear()
         self.actor_critic.reset(dones)
 
-        return rewards.clone()
-    ### ========================================== ###
+        return rewards_total
     
     def compute_returns(self, last_critic_obs):
-        ### ========================================== ###
-        # 修改：last_values shape 为 (num_envs, num_reward_groups)
         last_values= self.actor_critic.evaluate(last_critic_obs).detach()
-        ### ========================================== ###
         self.storage.compute_returns(last_values, self.gamma, self.lam)
     
 
@@ -225,10 +198,7 @@ class PPO:
                 self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0]) # match distribution dimension
 
                 actions_log_prob_batch = self.actor_critic.get_actions_log_prob(actions_batch)
-                ### ========================================== ###
-                # 修改：获取所有 Critic 头的预测值 (batch_size, num_critics)
-                value_batch_all = self.actor_critic.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
-                ### ========================================== ###
+                value_batch = self.actor_critic.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
                 mu_batch = self.actor_critic.action_mean
                 sigma_batch = self.actor_critic.action_std
                 entropy_batch = self.actor_critic.entropy
@@ -272,25 +242,15 @@ class PPO:
                                                                                 1.0 + self.clip_param)
                 surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
 
-                ### ========================================== ###
-                # 修改：计算 Multi-Critic 价值损失，对每个头部的损失取平均
-                value_loss_total = 0
-                num_heads = value_batch_all.shape[1]
-                for i in range(num_heads):
-                    value_batch = value_batch_all[:, i:i + 1]
-                    target_val = target_values_batch[:, i:i + 1]
-                    ret_batch = returns_batch[:, i:i + 1]
-                    
-                    if self.use_clipped_value_loss:
-                        value_clipped = target_val + (value_batch - target_val).clamp(-self.clip_param, self.clip_param)
-                        value_losses = (value_batch - ret_batch).pow(2)
-                        value_losses_clipped = (value_clipped - ret_batch).pow(2)
-                        value_loss_i = torch.max(value_losses, value_losses_clipped).mean()
-                    else:
-                        value_loss_i = (ret_batch - value_batch).pow(2).mean()
-                    value_loss_total += value_loss_i
-                value_loss = value_loss_total / num_heads
-                ### ========================================== ###
+                # Value function loss
+                if self.use_clipped_value_loss:
+                    value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(-self.clip_param,
+                                                                                                    self.clip_param)
+                    value_losses = (value_batch - returns_batch).pow(2)
+                    value_losses_clipped = (value_clipped - returns_batch).pow(2)
+                    value_loss = torch.max(value_losses, value_losses_clipped).mean()
+                else:
+                    value_loss = (returns_batch - value_batch).pow(2).mean()
 
                 loss = surrogate_loss + \
                        self.value_loss_coef * value_loss - \

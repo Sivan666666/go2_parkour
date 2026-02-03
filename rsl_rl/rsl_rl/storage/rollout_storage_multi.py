@@ -63,7 +63,6 @@ class RolloutStorage:
         self.obs_shape = obs_shape
         self.privileged_obs_shape = privileged_obs_shape
         self.actions_shape = actions_shape
-        num_reward_groups = 2
         self.num_reward_groups = num_reward_groups
     ### ========================================== ###
 
@@ -105,24 +104,21 @@ class RolloutStorage:
     def add_transitions(self, transition: Transition):
         if self.step >= self.num_transitions_per_env:
             raise AssertionError("Rollout buffer overflow")
+        self.observations[self.step].copy_(transition.observations)
+        if self.privileged_observations is not None: self.privileged_observations[self.step].copy_(transition.critic_observations)
+        self.actions[self.step].copy_(transition.actions)
         ### ========================================== ###
-        # 修改：适配 transition 为字典(dict)的情况
-        # 将原来的 transition.observations 改为 transition["observations"]，以此类推
-        self.observations[self.step].copy_(transition["observations"])
-        if self.privileged_observations is not None: 
-            self.privileged_observations[self.step].copy_(transition["critic_observations"])
-        self.actions[self.step].copy_(transition["actions"])
+        # 修改：适配多维度奖励的拷贝
+        self.rewards[self.step].copy_(transition.rewards.view(self.num_envs, -1))
+        self.values[self.step].copy_(transition.values) # transition.values 此时是 (num_envs, num_critics)
         ### ========================================== ###
-        # 适配多维度奖励的拷贝 (Multi-Critic)
-        self.rewards[self.step].copy_(transition["rewards"].view(self.num_envs, -1))
-        self.values[self.step].copy_(transition["values"])
-        ### ========================================== ###
-        self.dones[self.step].copy_(transition["dones"].view(-1, 1))
-        self.actions_log_prob[self.step].copy_(transition["actions_log_prob"].view(-1, 1))
-        self.mu[self.step].copy_(transition["action_mean"])
-        self.sigma[self.step].copy_(transition["action_sigma"])
+        self.dones[self.step].copy_(transition.dones.view(-1, 1))
+        
+        self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
+        self.mu[self.step].copy_(transition.action_mean)
+        self.sigma[self.step].copy_(transition.action_sigma)
 
-        self._save_hidden_states(transition["hidden_states"])
+        self._save_hidden_states(transition.hidden_states)
         self.step += 1
 
     def _save_hidden_states(self, hidden_states):
