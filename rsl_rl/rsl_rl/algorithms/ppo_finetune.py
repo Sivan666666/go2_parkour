@@ -88,6 +88,14 @@ class PPO_finetune:
 
         self.desired_kl = desired_kl
         self.schedule = schedule
+        
+        # for finetune
+        learning_rate = 1e-4
+        entropy_coef = 0.003
+        clip_param = 0.1
+        max_grad_norm = 1.0
+        num_learning_epochs = 5
+
         self.learning_rate = learning_rate
 
         # PPO components
