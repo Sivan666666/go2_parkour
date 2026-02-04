@@ -110,10 +110,10 @@ class ScanAttentionEncoder(nn.Module):
             activation,
             nn.Linear(128, self.internal_dim)
         )
-
+        print(f"ScanAttentionEncoder: proprio_dim {proprio_dim} -> internal_dim {self.internal_dim}")
         # 3. 两层 Cross-Attention
         self.attn_layers = nn.ModuleList([
-            nn.MultiheadAttention(embed_dim=self.internal_dim, num_heads=4, batch_first=True)
+            nn.MultiheadAttention(embed_dim=self.internal_dim, num_heads=16, batch_first=True)
             for _ in range(2)
         ])
         self.norms = nn.ModuleList([nn.LayerNorm(self.internal_dim) for _ in range(2)])
@@ -188,7 +188,7 @@ class Actor(nn.Module):
             self.scan_encoder = ScanAttentionEncoder(
                 num_scan=num_scan,
                 scan_encoder_dims=scan_encoder_dims,
-                proprio_dim=num_prop, 
+                proprio_dim=num_prop * num_hist, 
                 activation=activation,
                 if_scan_encode=self.if_scan_encode
             )
@@ -220,7 +220,8 @@ class Actor(nn.Module):
             if self.if_scan_encode:
                 obs_scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
                 if scandots_latent is None:
-                    scan_latent = self.scan_encoder(obs_scan, proprio)
+                    hist = obs[:, -self.num_hist*self.num_prop:]
+                    scan_latent = self.scan_encoder(obs_scan, hist)
                 else:
                     scan_latent = scandots_latent
                 obs_prop_scan = torch.cat([obs[:, :self.num_prop], scan_latent], dim=1)
@@ -238,7 +239,8 @@ class Actor(nn.Module):
             if self.if_scan_encode:
                 obs_scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
                 if scandots_latent is None:
-                    scan_latent = self.scan_encoder(obs_scan, proprio)
+                    hist = obs[:, -self.num_hist*self.num_prop:]
+                    scan_latent = self.scan_encoder(obs_scan, hist)
                 else:
                     scan_latent = scandots_latent
                 obs_prop_scan = torch.cat([obs[:, :self.num_prop], scan_latent], dim=1)

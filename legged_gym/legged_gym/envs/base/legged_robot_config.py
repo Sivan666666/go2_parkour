@@ -401,7 +401,7 @@ class LeggedRobotCfgPPO(BaseConfig):
     class policy:
         init_noise_std = 1.0
         continue_from_last_std = True
-        scan_encoder_dims = [128, 64, 32]
+        scan_encoder_dims = [256, 128, 64]
         actor_hidden_dims = [512, 256, 128]
         critic_hidden_dims = [512, 256, 128]
         priv_encoder_dims = [64, 20]
