@@ -175,10 +175,10 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         # 原有噪声
         dropout_prob = 0.02
-        salt_pepper_prob = 0.01
+        salt_pepper_prob = 0.02
 
         # Gaussian shift
-        gaussian_shift_std = 0.5
+        gaussian_shift_std = 5
 
 
         scale = 1
