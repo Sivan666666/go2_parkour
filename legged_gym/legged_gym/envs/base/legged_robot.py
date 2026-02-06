@@ -1236,7 +1236,7 @@ class LeggedRobot(BaseTask):
         # 如果有高度测量,追加高度噪声
         if self.cfg.terrain.measure_heights:
             height_noise = torch.ones(self.measured_heights.shape[1] if hasattr(self, 'measured_heights') else 187, 
-                                    device=self.device) * noise_scales.height_measurements * noise_level * self.obs_scales.height_measurements
+                                    device=self.device) * noise_scales.height_measurements * noise_level 
             noise_vec = torch.cat([noise_vec, height_noise], dim=0)
         
         return noise_vec

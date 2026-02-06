@@ -138,7 +138,7 @@ class LeggedRobotCfg(BaseConfig):
         clip_observations = 100.
         clip_actions = 1.2
     class noise:
-        add_noise = False
+        add_noise = True
         noise_level = 1.0 # scales other values
         quantize_height = True
         class noise_scales:
@@ -148,7 +148,7 @@ class LeggedRobotCfg(BaseConfig):
             gravity = 0.05  # 用于 IMU (roll, pitch, yaw)
             dof_pos = 0.05
             dof_vel = 0.05
-            height_measurements = 0.02
+            height_measurements = 0.05
             
             # 补齐的噪声尺度
             rotation = 0.0  # 未使用
@@ -317,7 +317,7 @@ class LeggedRobotCfg(BaseConfig):
         randomize_friction = True
         friction_range = [0.6, 2.]
         randomize_base_mass = True
-        added_mass_range = [0., 3.]
+        added_mass_range = [0., 5.]
         randomize_base_com = True
         added_com_range = [-0.2, 0.2]
         push_robots = True
@@ -325,7 +325,7 @@ class LeggedRobotCfg(BaseConfig):
         max_push_vel_xy = 0.5
 
         randomize_motor = True
-        motor_strength_range = [0.8, 1.2]
+        motor_strength_range = [0.6, 1.2]
 
         delay_update_global_steps = 24 * 8000
         action_delay = False
