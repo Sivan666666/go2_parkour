@@ -124,7 +124,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         # 🔥 Horizontal FOV 域随机化
         horizontal_fov = 79  # 基准值
-        horizontal_fov_range = [77, 79, 81]
+        horizontal_fov_range = [77, 78, 79, 80, 81, 82, 87]
         # horizontal_fov_range = [86, 87, 88]   # 随机范围 86-88 度
 
         buffer_len = 2
@@ -135,15 +135,17 @@ class Go2RoughCfg( LeggedRobotCfg ):
 
         # 噪声总开关
         enable_noise = True
-        dis_noise = 0.0
+
+        dis_noise_prob = 0.7
+        dis_noise = 0.2
 
         # 1. Clip: 近距离设为无穷
         clip_near_distance = 0.15  # 0.15m以内设为无穷大
 
         # 2. Edge noise: 边缘噪声
-        edge_noise_enable_prob = 0.1  #  80%概率启用边缘噪声
-        edge_noise_prob = 0.5  # 边缘处30%概率设为无穷
-        edge_gradient_threshold = 0.3  # 深度梯度阈值(米)
+        edge_noise_enable_prob = 0.7  #  80%概率启用边缘噪声
+        edge_noise_prob = 0.8  # 边缘处30%概率设为无穷
+        edge_gradient_threshold = 0.2  # 深度梯度阈值(米)
         edge_dilation_kernel_size = 3  # 边缘膨胀核大小
 
         # 3. Holes: 柏林噪声模拟空洞
@@ -154,16 +156,16 @@ class Go2RoughCfg( LeggedRobotCfg ):
         perlin_noise_evolution_speed = 0.005  # 时间演化速度
 
         #  启用块状空洞 代替 柏林
-        hole_noise_enable_prob = 0.1      # 50% 概率启用块状空洞
-        hole_noise_prob = 0.05        # 5% 区域有空洞
-        hole_block_size = 8           # 8×8 像素的块
+        hole_noise_enable_prob = 0.3      # 50% 概率启用块状空洞
+        hole_noise_prob = 0.15        # 5% 区域有空洞
+        hole_block_size = 10           # 10×10 像素的块
 
         # 4. Blind spot: 去除左侧列
         blind_spot_left_columns = 0  # 去除左侧5列
 
         # 5. Gaussian noise: 高斯噪声
-        gaussian_noise_enable_prob = 0.1  #  80%概率启用高斯噪声
-        gaussian_noise_std = 0.01
+        gaussian_noise_enable_prob = 0.3  #  80%概率启用高斯噪声
+        gaussian_noise_std = 0.02
         gaussian_noise_distance_factor = 0.1
 
         # 6. Gaussian Blur: 最终平滑 (新增)
@@ -172,8 +174,11 @@ class Go2RoughCfg( LeggedRobotCfg ):
         gaussian_blur_sigma = 1.0  # 标准差(越大越模糊)
 
         # 原有噪声
-        dropout_prob = 0.0
-        salt_pepper_prob = 0.0
+        dropout_prob = 0.02
+        salt_pepper_prob = 0.02
+
+        # Gaussian shift
+        gaussian_shift_std = 5
 
 
         scale = 1
