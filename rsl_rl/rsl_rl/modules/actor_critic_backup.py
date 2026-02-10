@@ -85,55 +85,6 @@ class StateHistoryEncoder(nn.Module):
         output = self.linear_output(output)
         return output
 
-class ScanAttentionEncoder(nn.Module):
-    """
-    带有 Cross-Attention 的扫描特征编码器
-    逻辑：Scan -> MLP -> KV; Proprio -> MLP -> Query
-    """
-    def __init__(self, num_scan, scan_encoder_dims, proprio_dim, activation, if_scan_encode):
-        super().__init__()
-        # 1. 基础 Scan MLP (保留原始逻辑)
-        if if_scan_encode:
-            layers = [nn.Linear(num_scan, scan_encoder_dims[0]), activation]
-            for l in range(len(scan_encoder_dims) - 1):
-                layers.append(nn.Linear(scan_encoder_dims[l], scan_encoder_dims[l+1]))
-                layers.append(nn.Tanh() if l == len(scan_encoder_dims) - 2 else activation)
-            self.base_mlp = nn.Sequential(*layers)
-            self.output_dim = scan_encoder_dims[-1]
-        else:
-            self.base_mlp = nn.Identity()
-            self.output_dim = num_scan
-
-        # 2. Proprioception 编码器 (Query)
-        # 编码到与 scan 特征相同的维度以便进行 Attention
-        self.proprio_encoder = nn.Sequential(
-            nn.Linear(proprio_dim, 128),
-            activation,
-            nn.Linear(128, self.output_dim)
-        )
-
-        # 3. 两层 Cross-Attention (与深度图架构一致)
-        # 注意：num_heads 需要能被 output_dim 整除，这里设为 4
-        self.attn_layers = nn.ModuleList([
-            nn.MultiheadAttention(embed_dim=self.output_dim, num_heads=4, batch_first=True)
-            for _ in range(2)
-        ])
-        self.norms = nn.ModuleList([nn.LayerNorm(self.output_dim) for _ in range(2)])
-
-    def forward(self, scan, proprioception):
-        # Scan 特征作为 Key/Value: [batch, 1, dim]
-        scan_feat = self.base_mlp(scan).unsqueeze(1)
-        # 本体感知作为 Query: [batch, 1, dim]
-        proprio_query = self.proprio_encoder(proprioception).unsqueeze(1)
-
-        x = proprio_query
-        for i in range(2):
-            # Query: Proprio, Key/Value: Scan
-            attn_out, _ = self.attn_layers[i](query=x, key=scan_feat, value=scan_feat)
-            x = self.norms[i](x + attn_out) # 残差连接 + 归一化
-            
-        return x.squeeze(1) # 返回最终的 scan_latent [batch, dim]
-
 class Actor(nn.Module):
     def __init__(self, num_prop, 
                  num_scan, 
@@ -187,21 +138,6 @@ class Actor(nn.Module):
         else:
             self.scan_encoder = nn.Identity()
             self.scan_encoder_output_dim = num_scan
-
-        # # 获取本体感知维度
-        # num_proprio = 53 
-        
-        # # 使用封装好的 ScanAttentionEncoder
-        # self.scan_encoder = ScanAttentionEncoder(
-        #     num_scan=num_scan,
-        #     scan_encoder_dims=scan_encoder_dims,
-        #     proprio_dim=num_proprio,
-        #     activation=activation,
-        #     if_scan_encode=self.if_scan_encode
-        # )
-        
-        # # 最终输出维度
-        # self.scan_encoder_output_dim = self.scan_encoder.output_dim
         
         actor_layers = []
         actor_layers.append(nn.Linear(num_prop+

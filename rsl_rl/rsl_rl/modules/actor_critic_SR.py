@@ -87,62 +87,87 @@ class StateHistoryEncoder(nn.Module):
 
 class ScanAttentionEncoder(nn.Module):
     """
-    带有 Cross-Attention 和最终映射 MLP 的扫描特征编码器
-    逻辑：Scan -> MLP -> KV; Proprio -> MLP -> Query -> Cross-Attention -> Final MLP
+    根据论文图 8B 重构的扫描特征编码器 (适配 1 通道高度图输入)
+    逻辑：
+    1. Scan (L*W*1) -> 2D CNN -> Map Features ((L*W) * (d-1))
+    2. Concat(Map Features, Scan) -> KV features ((L*W) * d)
+    3. Proprioception -> MLP -> Proprio Embedding (1 * d) 作为 Query
+    4. MHA(Q, K, V) -> 最终的 Map Encoding (1 * d)
     """
     def __init__(self, num_scan, scan_encoder_dims, proprio_dim, activation, if_scan_encode):
         super().__init__()
-        # 1. 基础 Scan MLP (提取原始特征)
-        if if_scan_encode:
-            layers = [nn.Linear(num_scan, scan_encoder_dims[0]), activation]
-            for l in range(len(scan_encoder_dims) - 1):
-                layers.append(nn.Linear(scan_encoder_dims[l], scan_encoder_dims[l+1]))
-                layers.append(nn.Tanh() if l == len(scan_encoder_dims) - 2 else activation)
-            self.base_mlp = nn.Sequential(*layers)
-            self.internal_dim = scan_encoder_dims[-1]
-        else:
-            self.base_mlp = nn.Identity()
-            self.internal_dim = num_scan
+        # d 为注意力机制的嵌入维度，从配置中获取（如 64 或 256）
+        self.d = scan_encoder_dims[-1] if scan_encoder_dims else 64
+        self.num_scan = num_scan
+        
+        # 确定地图的网格尺寸 L 和 W
+        # 注意：如果你的 num_scan 不是方阵（如 187=17x11），请手动在此指定 self.L 和 self.W
+        self.L = 12
+        self.W = 11
+        if self.L * self.W != num_scan:
+            # 兼容非方阵情况（常见于 legged-gym 的 187 点配置）
+            if num_scan == 187: self.L, self.W = 17, 11
+            else: raise ValueError(f"Cannot reshape num_scan {num_scan} into a rectangular grid.")
 
-        # 2. Proprioception 编码器 (Query)
+        # 1. Map CNN: 对应图 8B 的 CNN 模块
+        # 输入通道为 1 (高度图)，输出通道设为 d-1，预留 1 维给原始高度值拼接
+        self.map_cnn = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=5, padding=2),
+            activation,
+            nn.Conv2d(16, self.d - 1, kernel_size=5, padding=2),
+            activation
+        )
+
+        # 2. Proprioception 编码器: 生成 Query
+        # 遵循你要求的“经过 MLP 编码”，将本体感知投影到维度 d
         self.proprio_encoder = nn.Sequential(
             nn.Linear(proprio_dim, 128),
             activation,
-            nn.Linear(128, self.internal_dim)
+            nn.Linear(128, self.d)
         )
 
-        # 3. 两层 Cross-Attention
-        self.attn_layers = nn.ModuleList([
-            nn.MultiheadAttention(embed_dim=self.internal_dim, num_heads=4, batch_first=True)
-            for _ in range(2)
-        ])
-        self.norms = nn.ModuleList([nn.LayerNorm(self.internal_dim) for _ in range(2)])
-
-        # 4. 🔥 最终映射 MLP (新增)
-        # 将 Attention 的输出进一步处理为最终维度
-        self.final_mlp = nn.Sequential(
-            nn.Linear(self.internal_dim, self.internal_dim),
-            activation,
-            nn.Linear(self.internal_dim, self.internal_dim),
-            nn.Tanh() # 保持输出分布在 [-1, 1]，与原始扫描编码器输出风格一致
-        )
-        self.output_dim = self.internal_dim
+        # 3. Multi-Head Attention (MHA)
+        # 将地图的所有点作为 Sequence 处理
+        self.mha = nn.MultiheadAttention(embed_dim=self.d, num_heads=4, batch_first=True)
+        
+        # 归一化层，保证训练稳定
+        self.norm = nn.LayerNorm(self.d)
+        self.output_dim = self.d
 
     def forward(self, scan, proprioception):
-        # Scan 特征作为 Key/Value: [batch, 1, dim]
-        scan_feat = self.base_mlp(scan).unsqueeze(1)
-        # 本体感知作为 Query: [batch, 1, dim]
-        proprio_query = self.proprio_encoder(proprioception).unsqueeze(1)
-
-        x = proprio_query
-        for i in range(2):
-            # Query: Proprio, Key/Value: Scan
-            attn_out, _ = self.attn_layers[i](query=x, key=scan_feat, value=scan_feat)
-            x = self.norms[i](x + attn_out) # 残差连接 + 归一化
-            
-        # 5. 🔥 映射成最终的 scan_latent
-        x = x.squeeze(1) # [batch, dim]
-        scan_latent = self.final_mlp(x)
+        # batch_size
+        batch_size = scan.shape[0]
+        
+        # 1. 还原高度图形状: [B, 1, L, W]
+        h_map = scan.view(batch_size, 1, self.L, self.W)
+        
+        # 2. CNN 提取局部特征: [B, d-1, L, W]
+        # 这里的卷积操作保持了原有的 L 和 W 维度
+        map_geometry = self.map_cnn(h_map)
+        
+        # 3. 拼接原始高度坐标 (对应图 8B 的 Concat 逻辑): [B, L, W, d]
+        # 调整特征维度顺序: [B, L, W, d-1]
+        map_geometry = map_geometry.permute(0, 2, 3, 1)
+        # 调整原始高度图顺序: [B, L, W, 1]
+        h_map_raw = h_map.permute(0, 2, 3, 1)
+        # 拼接后得到每个点的完整特征向量 (维度 d)
+        map_combined = torch.cat([map_geometry, h_map_raw], dim=-1)
+        
+        # 4. 展平为 Token 序列作为 Key 和 Value: [B, L*W, d]
+        kv = map_combined.reshape(batch_size, -1, self.d)
+        
+        # 5. 生成 Query (本体感知编码): [B, 1, d]
+        q = self.proprio_encoder(proprioception).unsqueeze(1)
+        
+        # 6. Cross-Attention
+        # 使用本体状态去检索地图中最重要的区域
+        attn_out, _ = self.mha(query=q, key=kv, value=kv)
+        
+        # 7. 最终输出 [B, d]
+        # 去掉 + q，仅保留 LayerNorm 处理后的注意力输出
+        # squeeze(1) 是为了将 [B, 1, d] 变成 [B, d]
+        scan_latent = self.norm(attn_out.squeeze(1))
+        
         return scan_latent
 
 class Actor(nn.Module):

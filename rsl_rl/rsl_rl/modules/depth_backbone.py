@@ -986,6 +986,120 @@ class RecurrentDepthBackbone_SRU(nn.Module):
             h, c = self.hidden_states
             self.hidden_states = (h.detach().clone(), c.detach().clone())
 
+class DepthBackbone_TASM(nn.Module):
+    """
+    TASM 视觉骨干网络：提取空间特征 Patch [Batch, 16, 64]
+    通过卷积保持空间结构，不进行全局池化。
+    """
+    def __init__(self, prop_dim, scandots_output_dim, hidden_state_dim, output_activation=None, num_frames=1):
+        super().__init__()
+        self.num_frames = num_frames
+        activation = nn.ELU()
+        
+        # 提取空间特征，保持轻量级以适应 Student 实时性要求
+        self.feature_extractor = nn.Sequential(
+            # [1, 58, 87] -> [32, 27, 42]
+            nn.Conv2d(in_channels=self.num_frames, out_channels=32, kernel_size=5, stride=2),
+            activation,
+            # [32, 27, 42] -> [64, 13, 20]
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=2),
+            activation,
+            # 自适应池化到 4x4 的网格空间块 (Spatial Patches)
+            nn.AdaptiveAvgPool2d((4, 4)) # shape: [batch, 64, 4, 4]
+        )
+        
+        self.token_dim = 64
+        self.projection = nn.Linear(64, self.token_dim)
+        
+        if output_activation == "tanh":
+            self.output_activation = nn.Tanh()
+        else:
+            self.output_activation = activation
+
+    def forward(self, images: torch.Tensor):
+        # images: [batch, 58, 87]
+        x = images.unsqueeze(1) if images.dim() == 3 else images
+        x = self.feature_extractor(x) # [batch, 64, 4, 4]
+        
+        # 展平空间维度 [batch, 64, 16] -> [batch, 16, 64]
+        x = x.flatten(2).transpose(1, 2)
+        x = self.output_activation(self.projection(x))
+        return x # 返回 16 个代表地形的空间 Token
+
+class RecurrentDepthBackbone_TASM(nn.Module):
+    """
+    TASM 循环记忆网络：
+    1. 使用本体感知 (含命令速度) 引导 Cross-Attention 检索地形。
+    2. 使用 SRU 门控机制保留长效地形空间记忆。
+    """
+    def __init__(self, base_backbone, env_cfg) -> None:
+        super().__init__()
+        activation = nn.ELU()
+        last_activation = nn.Tanh()
+        self.base_backbone = base_backbone # 对应上面的 DepthBackbone_TASM
+        
+        self.proprio_dim = 53 if env_cfg is None else env_cfg.env.n_proprio
+        self.embed_dim = 64  # Attention 维度
+        self.rnn_hidden = 512
+        
+        # 1. 轨迹引导编码器 (Intent Query)
+        # 重点利用 cmd_vx, ang_vel, imu_obs 生成注意力 Query
+        self.intent_encoder = nn.Sequential(
+            nn.Linear(self.proprio_dim, 128),
+            activation,
+            nn.Linear(128, self.embed_dim)
+        )
+        
+        # 2. Cross-Attention 层
+        # 用机器人的“运动意图”去匹配“地形特征”
+        self.cross_attn = nn.MultiheadAttention(embed_dim=self.embed_dim, num_heads=4, batch_first=True)
+        self.attn_norm = nn.LayerNorm(self.embed_dim)
+        
+        # 3. Spatially-Enhanced Recurrent Unit (SRU) 
+        # 这里使用你的 network.py 中定义的 LSTM_SRU_Gate
+        # 它通过空间变换操作增强了记忆的稳定性
+        self.rnn = LSTM_SRU_Gate(
+            input_size=self.embed_dim + self.proprio_dim, # 视觉上下文 + 原始观测
+            hidden_size=self.rnn_hidden, 
+            num_layers=2, 
+            batch_first=True
+        )
+        
+        # 4. 输出投影层 (保持与 Teacher 阶段维度一致)
+        self.output_mlp = nn.Sequential(
+            nn.Linear(self.rnn_hidden, 256),
+            activation,
+            nn.Linear(256, 32 + 2), # 32个scandots高度 + 2个附加参数
+            last_activation
+        )
+        self.hidden_states = None
+
+    def forward(self, depth_image, proprioception):
+        # A. 视觉特征提取 [batch, 16, 64]
+        depth_patches = self.base_backbone(depth_image)
+        
+        # B. 运动意图 Query 生成 [batch, 1, 64]
+        intent_query = self.intent_encoder(proprioception).unsqueeze(1)
+        
+        # C. Cross-Attention: 寻找与路径相关的地形特征
+        attn_out, _ = self.cross_attn(query=intent_query, key=depth_patches, value=depth_patches)
+        visual_context = self.attn_norm(attn_out).squeeze(1) # [batch, 64]
+        
+        # D. SRU 时空融合更新
+        # 融合了“我看到的有用信息”与“我现在的完整状态”
+        rnn_input = torch.cat([visual_context, proprioception], dim=-1).unsqueeze(1)
+        rnn_out, self.hidden_states = self.rnn(rnn_input, self.hidden_states)
+        
+        # E. 最终 Scandots 预测
+        output = self.output_mlp(rnn_out.squeeze(1))
+        return output
+
+    def detach_hidden_states(self):
+        if self.hidden_states is not None:
+            # SRU 的 hidden_states 是 (h, c) 元组
+            h, c = self.hidden_states
+            self.hidden_states = (h.detach().clone(), c.detach().clone())
+
 # # 使用别名保持兼容性
 # RecurrentDepthBackbone = RecurrentDepthBackbone_LocoTransformer
 # DepthOnlyFCBackbone58x87 = DepthBackboneLocoTransformer

@@ -203,15 +203,15 @@ class Go2RoughCfg( LeggedRobotCfg ):
             collision = -10.
             action_rate = -0.1
             delta_torques = -1.0e-7
-            torques = -0.00001
+            torques = -0.00005
             # hip_pos = -0.5
             hip_pos = -0.8
             smoothness = -0.001
-            dof_error = -0.08
+            dof_error = -0.1
             feet_stumble = -1
-            feet_edge = -0.8
-            feet_hollow = -0.8
-            
+            feet_edge = -0.08
+            feet_hollow = -0.08
+
             # feet_air_time = 0.01
             feet_contact_forces = -0.01
             roll = -1.
