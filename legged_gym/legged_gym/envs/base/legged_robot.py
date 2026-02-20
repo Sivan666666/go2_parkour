@@ -49,6 +49,11 @@ from legged_gym.utils.helpers import class_to_dict
 from scipy.spatial.transform import Rotation as R
 from .legged_robot_config import LeggedRobotCfg
 
+
+from legged_gym.utils.noise_utils.depth_noise import DepthNoise
+from legged_gym.utils.noise_utils.depth_noise_baseline import DepthNoiseBaseline
+
+
 from tqdm import tqdm
 import cv2
 import matplotlib.pyplot as plt
@@ -606,6 +611,32 @@ class LeggedRobot(BaseTask):
         # 🔥 初始化柏林噪声生成器 (GPU 版本)
         
         if self.cfg.depth.use_camera:
+
+            self.depth_model = DepthNoise(focal_length=28.0,
+                             baseline=0.12, 
+                             min_depth=0.15,
+                             max_depth=2)
+            
+            # self.depth_model = DepthNoiseBaseline(focal_length=28.0,
+            #                  baseline=0.12, 
+            #                  min_depth=0.,
+            #                  max_depth=2)
+
+            self.depth_model = self.depth_model.to(sim_device)
+
+            def normalize_depth(depth, min_depth, max_depth, is_log):
+                depth = torch.nan_to_num(depth, nan=0.0, posinf=max_depth, neginf=0.0)
+                depth = torch.clamp(depth, min_depth, max_depth) # Clamp the depth values
+                depth = torch.log(depth + 1.0) if is_log else depth
+                return depth
+
+            self.normalize_depth_fn = lambda x: normalize_depth(x, 0.15, 2, is_log=False)
+
+            # 7) 高斯模糊（最终平滑，固定参数 + 边缘复制填充）
+            self.apply_gaussian_blur = self.cfg.depth.apply_gaussian_blur  # 是否应用高斯模糊
+            self.gaussian_blur_kernel_size = self.cfg.depth.gaussian_blur_kernel_size  # 核大小(奇数)
+            self.gaussian_blur_sigma = self.cfg.depth.gaussian_blur_sigma     # 标准差(越大越模糊)
+
             # 🔥 预计算 Sobel 卷积核 (用于边缘检测)
             sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32, device=sim_device)
             sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32, device=sim_device)
@@ -635,6 +666,10 @@ class LeggedRobot(BaseTask):
                 device=sim_device
             ) * 10.0  # 0-10 的随机初始相位
             
+            # 🔥 环境噪声启用标志
+            dis_noise_prob = getattr(self.cfg.depth, 'dis_noise_prob', 0.5)
+            self.env_has_dis_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < dis_noise_prob
+
             # 🔥 环境噪声启用标志
             edge_enable_prob = getattr(self.cfg.depth, 'edge_noise_enable_prob', 1.0)
             self.env_has_edge_noise = torch.rand(self.cfg.env.num_envs, device=sim_device) < edge_enable_prob
@@ -723,24 +758,116 @@ class LeggedRobot(BaseTask):
     def get_history_observations(self):
         return self.obs_history_buf
     
+    def _get_noise_scale_vec(self, cfg):
+        """ Sets a vector used to scale the noise added to the observations.
+            [NOTE]: Must be adapted when changing the observations structure
+
+        Args:
+            cfg (Dict): Environment config file
+
+        Returns:
+            [torch.Tensor]: Vector of scales used to multiply a uniform distribution in [-1, 1]
+        """
+        self.add_noise = self.cfg.noise.add_noise
+        noise_scales = self.cfg.noise.noise_scales
+        noise_level = self.cfg.noise.noise_level
+        
+        # 按照 obs_buf 的构建顺序逐段设置噪声尺度
+        noise_vec_list = []
+        
+        # 1. base_ang_vel (3)
+        noise_vec_list.append(torch.ones(3, device=self.device) * noise_scales.ang_vel * noise_level * self.obs_scales.ang_vel)
+        
+        # 2. imu_obs (roll, pitch) + yaw (3) - 使用 gravity 噪声
+        noise_vec_list.append(torch.ones(3, device=self.device) * noise_scales.gravity * noise_level)
+        
+        # 3. cmd_yaw (1) - no noise
+        noise_vec_list.append(torch.zeros(1, device=self.device))
+        
+        # 4. delta_next_yaw (1) - no noise
+        noise_vec_list.append(torch.zeros(1, device=self.device))
+        
+        # 5. zero_cmd_xy (2) - no noise
+        noise_vec_list.append(torch.zeros(2, device=self.device))
+        
+        # 6. cmd_vx (1) - no noise
+        noise_vec_list.append(torch.zeros(1, device=self.device))
+        
+        # 7. env_class flags (2) - no noise
+        noise_vec_list.append(torch.zeros(2, device=self.device))
+        
+        # 8. dof_pos (num_actions)
+        noise_vec_list.append(torch.ones(self.num_actions, device=self.device) * noise_scales.dof_pos * noise_level * self.obs_scales.dof_pos)
+        
+        # 9. dof_vel (num_actions)
+        noise_vec_list.append(torch.ones(self.num_actions, device=self.device) * noise_scales.dof_vel * noise_level * self.obs_scales.dof_vel)
+        
+        # 10. last_actions (num_actions) - no noise
+        noise_vec_list.append(torch.zeros(self.num_actions, device=self.device))
+        
+        # 11. foot_contacts (4) - no noise
+        noise_vec_list.append(torch.zeros(4, device=self.device))
+        
+        # 拼接成一个完整的向量
+        noise_vec = torch.cat(noise_vec_list, dim=0)
+        
+        # 如果有高度测量,追加高度噪声
+        if self.cfg.terrain.measure_heights:
+            height_noise = torch.ones(self.measured_heights.shape[1] if hasattr(self, 'measured_heights') else 187, 
+                                    device=self.device) * noise_scales.height_measurements * noise_level 
+            noise_vec = torch.cat([noise_vec, height_noise], dim=0)
+        
+        return noise_vec
+    
     def normalize_depth_image(self, depth_image):
         depth_image = depth_image * -1
         # print("depth_image min/max before clip:", depth_image.min().item(), depth_image.max().item())
         depth_image = (depth_image - self.cfg.depth.near_clip) / (self.cfg.depth.far_clip - self.cfg.depth.near_clip)  - 0.5
         return depth_image
     
+    def _get_gaussian_shift_grid(self, depth, shift_x: torch.Tensor, shift_y: torch.Tensor):
+        """生成用于空间抖动的仿射变换网格"""
+        B, C, H, W = depth.size()
+        device = depth.device
+        theta = torch.zeros(B, 2, 3, device=device)
+        theta[:, 0, 0] = 1.0
+        theta[:, 1, 1] = 1.0
+        # 计算归一化的位移量 (-1 到 1 之间)
+        # 注意：grid_sample 的坐标系是 [-1, 1]，所以需要将像素位移转换为归一化坐标
+        theta[:, 0, 2] = -2 * shift_x / (W - 1)
+        theta[:, 1, 2] = -2 * shift_y / (H - 1)
+        
+        grid = torch.nn.functional.affine_grid(theta, size=depth.size(), align_corners=False)
+        return grid
+    
     def process_depth_image(self, depth_images):
         """处理深度图像 (全 GPU 优化版本)"""
         
         depth_images = self.crop_depth_image(depth_images)
-        depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0]     
-
+        # depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0] 
+        
+        depth_images = - depth_images
+        # normalize_depth_fn = lambda x: normalize_depth(x, 0.15, 2, is_log=False)
+        # print("depth image min/max before model:", depth_images.min().item(), depth_images.max().item())
+        depth_images = self.normalize_depth_fn(depth_images)
+        # print("depth image min/max after norma:", depth_images.min().item(), depth_images.max().item())
+        depth_images = self.depth_model(depth_images).squeeze(1)
+        # print("depth image min/max after model:", depth_images.min().item(), depth_images.max().item())
+        depth_images = - depth_images
+        """处理深度图像 (全 GPU 优化版本)"""
+        
         if getattr(self.cfg.depth, 'enable_noise', True):
             # 1) 近距离置为 -far_clip
             distance = torch.abs(depth_images)
             near_mask = distance < self.cfg.depth.clip_near_distance
             depth_images = depth_images.clone()
             depth_images[near_mask] = -self.cfg.depth.far_clip
+
+
+            if hasattr(self.cfg.depth, 'dis_noise_prob'):
+                noise = self.cfg.depth.dis_noise * 2 * (torch.rand_like(depth_images, device=self.device) - 0.5)
+                apply_mask = self.env_has_dis_noise[:, None, None].expand_as(depth_images)
+                depth_images[apply_mask] = depth_images[apply_mask] + noise[apply_mask]
 
             # 2) 高斯噪声（仅对启用的环境）
             if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
@@ -814,6 +941,39 @@ class LeggedRobot(BaseTask):
                 depth_images[salt_mask] = -self.cfg.depth.far_clip
                 depth_images[pepper_mask] = -self.cfg.depth.near_clip
 
+            # ========================== 新增部分 ==========================
+            # 7) Gaussian Shift (空间抖动/错位)
+            # 模拟相机内参标定误差或剧烈震动导致的像素偏移
+            if hasattr(self.cfg.depth, 'gaussian_shift_std') and self.cfg.depth.gaussian_shift_std > 0:
+                shift_std = self.cfg.depth.gaussian_shift_std
+                batch_size = depth_images.size(0)
+                
+                # 为每个环境生成随机的 x 和 y 偏移量
+                shift_x = torch.randn(batch_size, device=self.device) * shift_std
+                shift_y = torch.randn(batch_size, device=self.device) * shift_std
+
+                # 可选：如果定义了 env_has_gaussian_shift，则只对特定环境应用
+                if hasattr(self, 'env_has_gaussian_shift'):
+                    shift_x[~self.env_has_gaussian_shift] = 0.0
+                    shift_y[~self.env_has_gaussian_shift] = 0.0
+
+                # 准备 grid_sample 需要的 4D 输入 (N, C, H, W)
+                depth_4d_shift = depth_images.unsqueeze(1)
+                
+                # 生成采样网格
+                grid = self._get_gaussian_shift_grid(depth_4d_shift, shift_x, shift_y)
+                
+                # 应用空间变换
+                # padding_mode='border' 会重复边缘像素，避免引入无效的0值
+                depth_shifted = torch.nn.functional.grid_sample(
+                    depth_4d_shift, grid, mode='bilinear', padding_mode='border', align_corners=False
+                )
+                
+                # 恢复形状 (N, H, W)
+                depth_images = depth_shifted.squeeze(1)
+            # ==============================================================
+
+
             
         
         # Clip 到有效范围
@@ -823,43 +983,10 @@ class LeggedRobot(BaseTask):
         # depth_image = self.resize_transform(depth_image[None, :]).squeeze()
         # depth_images = self.resize_transform(depth_images.unsqueeze(1)).squeeze(1)
         depth_images = resize2d(depth_images.unsqueeze(1), (self.cfg.depth.resized[1], self.cfg.depth.resized[0])).squeeze(1)
-        # print("depth_image min/max after resize:", depth_images.min().item(), depth_images.max().item())
-        # depth_images = torch.clip(depth_images, -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
-
-        # # 7) 高斯模糊（逐图分组卷积）
-        # if getattr(self.cfg.depth, 'apply_gaussian_blur', False):
-        #     kernel_size = getattr(self.cfg.depth, 'gaussian_blur_kernel_size', 5)
-        #     sigma = getattr(self.cfg.depth, 'gaussian_blur_sigma', 1.0)
-
-        #     # 当 kernel_size 或 sigma 变化时重建核
-        #     if (not hasattr(self, '_gaussian_kernel')
-        #         or self._gaussian_kernel_size != kernel_size
-        #         or getattr(self, '_gaussian_sigma', None) != sigma):
-        #         x = torch.arange(kernel_size, dtype=torch.float32, device=self.device) - kernel_size // 2
-        #         gauss_1d = torch.exp(-x ** 2 / (2 * sigma ** 2))
-        #         gauss_1d = gauss_1d / gauss_1d.sum()
-        #         gauss_2d = gauss_1d.unsqueeze(0) * gauss_1d.unsqueeze(1)
-        #         self._gaussian_kernel = gauss_2d.view(1, 1, kernel_size, kernel_size)  # [1,1,k,k]
-        #         self._gaussian_kernel_size = kernel_size
-        #         self._gaussian_sigma = sigma
-
-        #     # 输入 [N,1,H,W] -> [1,N,H,W]，按样本分组卷积
-        #     depth_4d = depth_images.unsqueeze(1)              # [N,1,H,W]
-        #     depth_4d_group = depth_4d.transpose(0, 1)         # [1,N,H,W]
-        #     kernel = self._gaussian_kernel.expand(depth_4d.shape[0], 1, kernel_size, kernel_size)  # [N,1,k,k]
-        #     depth_blurred = torch.nn.functional.conv2d(
-        #         depth_4d_group, kernel, padding=kernel_size // 2, groups=depth_4d.shape[0]
-        #     ).transpose(0, 1).squeeze(1)  # 回到 [N,H,W]
-        #     depth_images = depth_blurred
-        #     print("Applied Gaussian blur to depth images.")
         
-        # 7) 高斯模糊（最终平滑，固定参数 + 边缘复制填充）
-        apply_gaussian_blur = True  # 是否应用高斯模糊
-        gaussian_blur_kernel_size = 3  # 核大小(奇数)
-        gaussian_blur_sigma = 1.0     # 标准差(越大越模糊)
-        if apply_gaussian_blur:
-            k = gaussian_blur_kernel_size
-            sigma = gaussian_blur_sigma
+        if self.apply_gaussian_blur:
+            k = self.gaussian_blur_kernel_size
+            sigma = self.gaussian_blur_sigma
             # 缓存核，避免重复构建
             if (not hasattr(self, "_gaussian_kernel")
                 or getattr(self, "_gaussian_kernel_size", None) != k
@@ -968,16 +1095,37 @@ class LeggedRobot(BaseTask):
         self.reached_goal_ids = torch.norm(self.root_states[:, :2] - self.cur_goals[:, :2], dim=1) < self.cfg.env.next_goal_threshold
         self.reach_goal_timer[self.reached_goal_ids] += 1
 
+        # self.target_pos_rel = self.cur_goals[:, :2] - self.root_states[:, :2]
+        # self.next_target_pos_rel = self.next_goals[:, :2] - self.root_states[:, :2]
+
+        # norm = torch.norm(self.target_pos_rel, dim=-1, keepdim=True)
+        # target_vec_norm = self.target_pos_rel / (norm + 1e-5)
+        # self.target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
+
+        # norm = torch.norm(self.next_target_pos_rel, dim=-1, keepdim=True)
+        # target_vec_norm = self.next_target_pos_rel / (norm + 1e-5)
+        # self.next_target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
+
+        # 保持 target_pos_rel 为 2D 以兼容原有的速度跟踪奖励
         self.target_pos_rel = self.cur_goals[:, :2] - self.root_states[:, :2]
         self.next_target_pos_rel = self.next_goals[:, :2] - self.root_states[:, :2]
 
+        # 计算当前目标点的水平距离 (norm)
         norm = torch.norm(self.target_pos_rel, dim=-1, keepdim=True)
         target_vec_norm = self.target_pos_rel / (norm + 1e-5)
         self.target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
 
-        norm = torch.norm(self.next_target_pos_rel, dim=-1, keepdim=True)
-        target_vec_norm = self.next_target_pos_rel / (norm + 1e-5)
-        self.next_target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
+        # 计算下一个目标点的 Yaw (用于观察)
+        norm_next = torch.norm(self.next_target_pos_rel, dim=-1, keepdim=True)
+        target_vec_next_norm = self.next_target_pos_rel / (norm_next + 1e-5)
+        self.next_target_yaw = torch.atan2(target_vec_next_norm[:, 1], target_vec_next_norm[:, 0])
+
+        # --- 新增：计算 3D 俯仰引导角度 ---
+        # 计算当前机身与目标点的垂直高度差
+        dz = self.next_goals[:, 2] - (self.root_states[:, 2] - 0.4)
+        # target_pitch = atan2(高度差, 水平距离)
+        # 使用 squeeze(-1) 将 norm 从 (N, 1) 转为 (N,)
+        self.target_pitch = torch.atan2(dz, norm_next.squeeze(-1))
 
     def post_physics_step(self):
         """ check terminations, compute observations and rewards
@@ -1182,21 +1330,28 @@ class LeggedRobot(BaseTask):
             ("feet_contact(centered,reindexed)", self.reindex_feet(self.contact_filt.float()-0.5), "足端接触状态")
         ]
 
-        obs_buf = torch.cat((#skill_vector, 
-                            self.base_ang_vel  * self.obs_scales.ang_vel,   #[1,3]
-                            imu_obs,    #[1,2]
-                            self.yaw[:, None], 
-                            self.commands[:, 2:3],
-                            0*self.delta_next_yaw[:, None],
-                            0*self.commands[:, 0:2], 
-                            self.commands[:, 0:1],  #[1,1]
-                            (self.env_class != 9).float()[:, None], 
-                            (self.env_class == 9).float()[:, None],
-                            self.reindex((self.dof_pos - self.default_dof_pos_all) * self.obs_scales.dof_pos),
-                            self.reindex(self.dof_vel * self.obs_scales.dof_vel),
-                            self.reindex(self.action_history_buf[:, -1]),
-                            self.reindex_feet(self.contact_filt.float()-0.5),
-                            ),dim=-1)
+        obs_buf = torch.cat((
+                                self.base_ang_vel * self.obs_scales.ang_vel,   # 3
+                                imu_obs,                                        # 2
+                                self.yaw[:, None],                              # 1
+                                self.commands[:, 2:3],                          # 1
+                                0*self.delta_next_yaw[:, None],                 # 1
+                                0*self.commands[:, 0:2],                        # 2
+                                self.commands[:, 0:1],                          # 1
+                                (self.env_class != 9).float()[:, None],         # 1
+                                (self.env_class == 9).float()[:, None],         # 1
+                                self.reindex((self.dof_pos - self.default_dof_pos_all) * self.obs_scales.dof_pos),  # num_actions
+                                self.reindex(self.dof_vel * self.obs_scales.dof_vel),                                # num_actions
+                                self.reindex(self.action_history_buf[:, -1]),                                         # num_actions
+                                self.reindex_feet(self.contact_filt.float()-0.5),                                     # 4
+                            ), dim=-1)
+
+        if self.add_noise:
+            # 确保 noise_scale_vec 的长度与 obs_buf 匹配
+            noise_vec_len = obs_buf.shape[1]
+            noise = (2 * torch.rand_like(obs_buf) - 1) * self.noise_scale_vec[:noise_vec_len]
+            obs_buf = obs_buf + noise
+
         priv_explicit = torch.cat((self.base_lin_vel * self.obs_scales.lin_vel,
                                    0 * self.base_lin_vel,
                                    0 * self.base_lin_vel), dim=-1)
@@ -1208,6 +1363,12 @@ class LeggedRobot(BaseTask):
         ), dim=-1)
         if self.cfg.terrain.measure_heights:
             heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.3 - self.measured_heights, -1, 1.)
+            #  给高度测量添加噪声(使用预计算的噪声向量尾部)
+            if self.add_noise:
+                height_start_idx = obs_buf.shape[1]
+                height_noise = (2 * torch.rand_like(heights) - 1) * \
+                    self.noise_scale_vec[height_start_idx:height_start_idx + heights.shape[1]]
+                heights = heights + height_noise
             self.obs_buf = torch.cat([obs_buf, heights, priv_explicit, priv_latent, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
         else:
             self.obs_buf = torch.cat([obs_buf, priv_explicit, priv_latent, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
@@ -1572,6 +1733,7 @@ class LeggedRobot(BaseTask):
         # initialize some data used later on
         self.common_step_counter = 0
         self.extras = {}
+        self.noise_scale_vec = self._get_noise_scale_vec(self.cfg)
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
         self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
@@ -1771,6 +1933,13 @@ class LeggedRobot(BaseTask):
 
         self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
         self.x_edge_mask = torch.tensor(self.terrain.x_edge_mask).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
+
+        # [新增] 将空心高度图传给 robot
+        if hasattr(self.terrain, 'hollow_height_map'):
+            self.hollow_height_map = torch.from_numpy(self.terrain.hollow_height_map).to(self.device)
+        else:
+            self.hollow_height_map = torch.zeros_like(self.x_edge_mask, dtype=torch.float)
+
 
     def attach_camera(self, i, env_handle, actor_handle):
         if self.cfg.depth.use_camera:
@@ -2289,13 +2458,18 @@ class LeggedRobot(BaseTask):
         # allowed = (self.env_class == 17) | (self.env_class == 9)
         # rew[~allowed] *= 0.01
         # rew[self.env_class != 17] = 0.
-        rew[self.env_class != 9] *= 0.00001
+        rew[self.env_class == 9] *= 5
+        rew[self.env_class != 9] *= 0.1
         return rew
     
     def _reward_roll(self):
         # 专门的 roll 惩罚项（便于单独调权重）
         return torch.square(self.roll)  # 或 torch.square(self.roll)
 
+    def _reward_pitch(self):
+        # 专门的 pitch 惩罚项（便于单独调权重）
+        return torch.square(self.pitch)  # 或 torch.square(self.pitch)
+    
     def _reward_dof_acc(self):
         return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
 
@@ -2385,6 +2559,61 @@ class LeggedRobot(BaseTask):
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
         return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
 
+    def _reward_stuck(self):
+        # Penalize stuck
+        return (torch.abs(self.base_lin_vel[:, 0]) < 0.1) * (torch.abs(self.commands[:, 0]) > 0.1)
+    
+    def _reward_cur_goals(self):
+        return self.cur_goal_idx
+    
+    def _reward_feet_hollow(self):
+        """ 惩罚脚掉进空心楼梯板子下方的行为 """
+        # 1. 获取脚的 XY 像素索引
+        feet_pos_xy = ((self.rigid_body_states[:, self.feet_indices, :2] + self.terrain.cfg.border_size) / self.cfg.terrain.horizontal_scale).round().long()
+        feet_pos_xy[..., 0] = torch.clip(feet_pos_xy[..., 0], 0, self.hollow_height_map.shape[0]-1)
+        feet_pos_xy[..., 1] = torch.clip(feet_pos_xy[..., 1], 0, self.hollow_height_map.shape[1]-1)
+
+        # 2. 查询对应位置的台阶表面高度
+        # target_h 的 shape: (num_envs, 4)
+        target_h = self.hollow_height_map[feet_pos_xy[..., 0], feet_pos_xy[..., 1]]
+
+        # 3. 判定判定
+        # a. 该位置确实是空心台阶区域 (target_h > 0)
+        # b. 脚的高度明显低于台阶表面高度 (这里留 2cm 的容差，比如脚厚度或传感器误差)
+        # c. 脚当前有接触力（说明踩到了空洞底部的地面）
+        foot_z = self.feet_pos[:, :, 2]
+        
+        # 掉进下方的判定掩码
+        is_underneath = (target_h > 0.01) & (foot_z < (target_h - 0.02))
+        
+        # 只有当脚落地(接触力>1.0)且在板子下面时才惩罚
+        # punish_mask = is_underneath & (self.contact_forces[:, self.feet_indices, 2] > 1.0)
+        
+        return torch.sum(is_underneath.float(), dim=-1)
+    
+    def _reward_tracking_pitch(self):
+        """ 引导机器人俯仰角正对 Waypoint，仅在距离目标点 1m 内生效 """
+        # 1. 计算当前目标点的水平距离
+        # 这里的 self.target_pos_rel 是在 _update_goals 中更新的 (dx, dy)
+        dist_xy = torch.norm(self.target_pos_rel, dim=-1)
+        
+        # 2. 判断距离：生成 2米范围掩码
+        # 只有距离小于 2.0m 的环境，mask 为 True (2.0)
+        mask = dist_xy < 2.0
+        mask2 = self.cur_goal_idx < self.cfg.terrain.num_goals - 1
+        mask = mask & mask2
+        
+        # 3. 计算当前的俯仰角误差
+        # self.target_pitch 是目标仰角，self.pitch 是当前机身仰角
+        # print("self.target_pitch:", self.target_pitch)
+        # print("self.pitch:", self.pitch)
+        # 如果是-的号 那就符号不对 所以改成加号
+        pitch_error = torch.square(self.target_pitch + self.pitch)
+        
+        # 4. 计算奖励并应用掩码
+        # 距离大于 1m 的环境，由于乘以 mask.float()，最终奖励为 0
+        reward = torch.exp(-pitch_error / self.cfg.rewards.tracking_sigma)
+        return reward * mask.float()
     # def _reward_no_move_when_command(self):
     #     # 取命令范围阈值
     #     lin_vel_clip = self.cfg.commands.lin_vel_clip if hasattr(self.cfg.commands, 'lin_vel_clip') else 0.1
