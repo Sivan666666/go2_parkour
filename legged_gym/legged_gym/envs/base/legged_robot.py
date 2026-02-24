@@ -562,6 +562,7 @@ class LeggedRobot(BaseTask):
             self.extras["depth"] = self.depth_buffer[:, -2]  # have already selected last one
         else:
             self.extras["depth"] = None
+        self.extras["fall"] = self.fall_buf
         return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
 
     def get_history_observations(self):
@@ -929,9 +930,9 @@ class LeggedRobot(BaseTask):
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             self.gym.clear_lines(self.viewer)
             if not self.cfg.depth.use_camera:
-                self._draw_height_samples()
+                # self._draw_height_samples()
                 self._draw_goals()
-                self._draw_feet()
+                # self._draw_feet()
                 self._draw_edge_mask()
                 self._draw_hollow_mask()  # 蓝色：空心板子高度
             if self.cfg.depth.use_camera:
@@ -962,6 +963,7 @@ class LeggedRobot(BaseTask):
         """ Check if environments need to be reset
         """
         self.reset_buf = torch.zeros((self.num_envs, ), dtype=torch.bool, device=self.device)
+        self.fall_buf = torch.zeros((self.num_envs, ), dtype=torch.bool, device=self.device)
         roll_cutoff = torch.abs(self.roll) > 1.2
         pitch_cutoff = torch.abs(self.pitch) > 1.2
         reach_goal_cutoff = self.cur_goal_idx >= self.cfg.terrain.num_goals
@@ -974,6 +976,7 @@ class LeggedRobot(BaseTask):
         self.reset_buf |= roll_cutoff
         self.reset_buf |= pitch_cutoff
         # self.reset_buf |= height_cutoff
+        self.fall_buf = roll_cutoff | pitch_cutoff # | height_cutoff
 
     def reset_idx(self, env_ids):
         """ Reset some environments.
@@ -1972,7 +1975,7 @@ class LeggedRobot(BaseTask):
         base_pos = self.root_states[i, :3].cpu().numpy()
         
         # 绘制半径和范围
-        radius_m = 1.5
+        radius_m = 3.5
         radius_px = int(radius_m / h_scale)
         
         cx = int((base_pos[0] + border) / h_scale)
@@ -1990,7 +1993,7 @@ class LeggedRobot(BaseTask):
             return
 
         # 采样步长，防止点太多卡顿
-        stride = 5 
+        stride = 2 
         indices = indices[::stride]
             
         sphere_geom = gymutil.WireframeSphereGeometry(0.01, 4, 4, None, color=(0, 0, 1))
@@ -2052,7 +2055,8 @@ class LeggedRobot(BaseTask):
             gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], sphere_pose)
     
     def _draw_goals(self):
-        sphere_geom = gymutil.WireframeSphereGeometry(0.1, 32, 32, None, color=(1, 0, 0))
+        sphere_geom = gymutil.WireframeSphereGeometry(0.1, 32, 32, None, color=(0, 1, 1))
+        sphere_geom_next = gymutil.WireframeSphereGeometry(0.1, 32, 32, None, color=(1, 1, 0))
         sphere_geom_cur = gymutil.WireframeSphereGeometry(0.1, 32, 32, None, color=(0, 0, 1))
         sphere_geom_reached = gymutil.WireframeSphereGeometry(self.cfg.env.next_goal_threshold, 32, 32, None, color=(0, 1, 0))
         goals = self.terrain_goals[self.terrain_levels[self.lookat_id], self.terrain_types[self.lookat_id]].cpu().numpy()
@@ -2066,15 +2070,17 @@ class LeggedRobot(BaseTask):
                 gymutil.draw_lines(sphere_geom_cur, self.gym, self.viewer, self.envs[self.lookat_id], pose)
                 if self.reached_goal_ids[self.lookat_id]:
                     gymutil.draw_lines(sphere_geom_reached, self.gym, self.viewer, self.envs[self.lookat_id], pose)
+            elif i == self.cur_goal_idx[self.lookat_id].cpu().item() + 1:
+                gymutil.draw_lines(sphere_geom_next, self.gym, self.viewer, self.envs[self.lookat_id], pose)
             else:
                 gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[self.lookat_id], pose)
         
         if not self.cfg.depth.use_camera:
-            # --- 绘制当前目标的 3D 引导箭头 ---
+            # # --- 绘制当前目标的 3D 引导箭头 ---
             sphere_geom_arrow = gymutil.WireframeSphereGeometry(0.02, 16, 16, None, color=(1, 0.35, 0.25))
             pose_robot = self.root_states[self.lookat_id, :3].cpu().numpy()
             
-            # 获取当前环境的 target_pitch (弧度)
+            # # 获取当前环境的 target_pitch (弧度)
             current_target_pitch = self.target_pitch[self.lookat_id].cpu().item()
             
             for i in range(5):
@@ -2091,15 +2097,15 @@ class LeggedRobot(BaseTask):
                 pose_z = pose_robot[2] + v_offset
                 
                 pose = gymapi.Transform(gymapi.Vec3(pose_arrow_xy[0], pose_arrow_xy[1], pose_z), r=None)
-                gymutil.draw_lines(sphere_geom_arrow, self.gym, self.viewer, self.envs[self.lookat_id], pose)
+                # gymutil.draw_lines(sphere_geom_arrow, self.gym, self.viewer, self.envs[self.lookat_id], pose)
             
             # --- 绘制下一个目标的 3D 引导箭头 (可选，逻辑相同) ---
-            sphere_geom_arrow_next = gymutil.WireframeSphereGeometry(0.02, 16, 16, None, color=(0, 1, 0.5))
-            for i in range(5):
+            sphere_geom_arrow_next = gymutil.WireframeSphereGeometry(0.02, 16, 16, None, color=(1, 1, 0))
+            for i in range(15):
                 norm = torch.norm(self.next_target_pos_rel, dim=-1, keepdim=True)
                 target_vec_norm = self.next_target_pos_rel / (norm + 1e-5)
                 
-                h_offset_next = 0.2 * (i + 3)
+                h_offset_next = 0.1 * (i + 3)
                 pose_arrow_xy = pose_robot[:2] + h_offset_next * target_vec_norm[self.lookat_id, :2].cpu().numpy()
                 
                 # 计算高度偏移（指向下一个目标）
@@ -2124,7 +2130,7 @@ class LeggedRobot(BaseTask):
         base_pos = self.root_states[i, :3].cpu().numpy()
         
         # 确定绘制半径 (例如 1.5 米)
-        radius_m = 1.5
+        radius_m = 5.5
         radius_px = int(radius_m / h_scale)
         
         # 计算当前机器人的网格坐标
@@ -2157,9 +2163,37 @@ class LeggedRobot(BaseTask):
         # 获取索引数据到CPU进行循环绘制
         indices_cpu = indices.cpu().numpy()
         
+        if indices_cpu.shape[0] == 0:
+            return
+
+        # --- 核心修改：找出最左侧的一列索引 ---
+        # ly 是局部 y 坐标，值越小表示在当前视野中越靠左
+        unique_y_indices = np.unique(indices_cpu[:, 1])
+        if len(unique_y_indices) > 1:
+            leftmost_y = np.max(unique_y_indices)
+        else:
+            leftmost_y = -1 # 如果只有一列点，就不执行删除，防止全没了
+
+        # ly 是局部 y 坐标，值越小表示在当前视野中越靠左
+        unique_y_indices2 = np.unique(indices_cpu[:, 0])
+        if len(unique_y_indices2) > 1:
+            leftmost_y2 = np.min(unique_y_indices2)
+        else:
+            leftmost_y2 = -1 # 如果只有一列点，就不执行删除，防止全没了
+
+        # 准备绘制
+        sphere_geom = gymutil.WireframeSphereGeometry(0.015, 4, 4, None, color=(1, 0, 0))
+        
         for idx in range(indices_cpu.shape[0]):
-            # 局部坐标转回全局网格坐标
             lx, ly = indices_cpu[idx]
+            
+            # --- 过滤逻辑：如果是最左侧那一列的点，直接跳过 ---
+            if ly == leftmost_y:
+                continue
+
+            # if lx == leftmost_y2:
+            #     continue
+                
             gx = x_min + lx
             gy = y_min + ly
             
@@ -2167,10 +2201,11 @@ class LeggedRobot(BaseTask):
             wx = gx * h_scale - border
             wy = gy * h_scale - border
             
-            # 获取该位置的地形高度，稍微抬高一点显示
+            # 获取地形高度
             z = self.height_samples[gx, gy].cpu().item() * v_scale
             
-            pose = gymapi.Transform(gymapi.Vec3(wx, wy, z + 0.05), r=None)
+            # 绘制
+            pose = gymapi.Transform(gymapi.Vec3(wx, wy, z + 0.02), r=None)
             gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], pose)
 
     

@@ -136,8 +136,10 @@ class Go2RoughCfg( LeggedRobotCfg ):
         # 噪声总开关
         enable_noise = True
 
-        dis_noise_prob = 0.7
-        dis_noise = 0.2
+        noise_level = 1
+
+        dis_noise_prob = 0.7 * noise_level
+        dis_noise = 0.2 * noise_level
 
         # 1. Clip: 近距离设为无穷
         clip_near_distance = 0.15  # 0.15m以内设为无穷大

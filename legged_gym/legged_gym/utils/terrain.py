@@ -965,8 +965,8 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
         # terrain.local_edge_mask[x_s:x_s+1, start_y:end_y] = True # 前缘
         terrain.local_edge_mask[x_e:x_e+1, start_y:end_y] = True # 后缘
         # 如果需要左右边缘惩罚：
-        terrain.local_edge_mask[x_s:x_e, start_y:start_y+1] = True
-        terrain.local_edge_mask[x_s:x_e, end_y-1:end_y] = True
+        # terrain.local_edge_mask[x_s:x_e, start_y:start_y+1] = True
+        # terrain.local_edge_mask[x_s:x_e, end_y-1:end_y] = True
         # # --- 关键步骤：更新高度场记录 ---
         # # 我们将台阶所在的矩形区域高度写入 height_field_raw
         # # 这样在 Terrain 最终处理时，台阶的边界会产生巨大的梯度，从而被计入 x_edge_mask
