@@ -190,9 +190,9 @@ class Go2RoughCfg( LeggedRobotCfg ):
         max_contact_force = 200.
         class scales:
             # tracking rewards
-            tracking_goal_vel = 2.5
+            tracking_goal_vel = 3.5
             tracking_ang_vel = 0.5
-            tracking_pitch = 0.5
+            tracking_pitch = 0.05
             # tracking_lin_vel = 0.25
             # tracking_yaw = 0.05
             # regularization rewards
@@ -200,26 +200,26 @@ class Go2RoughCfg( LeggedRobotCfg ):
             ang_vel_xy = -0.05
             orientation = -1.
             dof_acc = -2.5e-7
-            collision = -1.
+            collision = -10.
             action_rate = -0.1
             delta_torques = -1.0e-7
-            torques = -0.00001
+            torques = -0.00005
             # hip_pos = -0.5
             hip_pos = -0.8
             smoothness = -0.001
-            dof_error = -0.08
+            dof_error = -0.1
             feet_stumble = -1
-            # feet_edge = -0.8
-            # feet_hollow = -0.8
-            
+            feet_edge = -0.08
+            feet_hollow = -0.08
+
             # feet_air_time = 0.01
             feet_contact_forces = -0.01
             roll = -1.
             pitch = -0.2
             
             # 根据HIMLOCO新加的奖励函数
-            base_height = -0.
-            cur_goals = 1
+            base_height = -0.2
+            cur_goals = 0.1
 
     
 

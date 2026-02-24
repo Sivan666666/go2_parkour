@@ -2597,9 +2597,9 @@ class LeggedRobot(BaseTask):
         # 这里的 self.target_pos_rel 是在 _update_goals 中更新的 (dx, dy)
         dist_xy = torch.norm(self.target_pos_rel, dim=-1)
         
-        # 2. 判断距离：生成 2米范围掩码
-        # 只有距离小于 2.0m 的环境，mask 为 True (2.0)
-        mask = dist_xy < 2.0
+        # 2. 判断距离：生成 1米范围掩码
+        # 只有距离小于 1.0m 的环境，mask 为 True (1.0)
+        mask = dist_xy < 1.0
         mask2 = self.cur_goal_idx < self.cfg.terrain.num_goals - 1
         mask = mask & mask2
         
