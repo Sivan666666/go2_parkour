@@ -415,7 +415,7 @@ class OnPolicyRunner:
         mean_std = self.alg.actor_critic.std.mean()
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs['collection_time'] + locs['learn_time']))
 
-        wandb_dict['Loss/value_function'] = ['mean_value_loss']
+        wandb_dict['Loss/value_function'] = locs['mean_value_loss']
         wandb_dict['Loss/surrogate'] = locs['mean_surrogate_loss']
         wandb_dict['Loss/estimator'] = locs['mean_estimator_loss']
         wandb_dict['Loss/hist_latent_loss'] = locs['mean_hist_latent_loss']
