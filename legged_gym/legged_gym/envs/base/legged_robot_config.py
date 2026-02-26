@@ -213,25 +213,25 @@ class LeggedRobotCfg(BaseConfig):
         num_cols = 40 # number of terrain cols (types)
         
         terrain_dict = {"smooth slope": 0., 
-                        "normal stairs down": 0.0,
-                        "normal stairs up": 0.,
-                        "steep hollow stairs down": 0.0,
-                        "steep hollow stairs up": 0.5,
-                        "discrete": 0., 
-                        "stepping stones": 0.0,
-                        "gaps": 0., 
-                        "flat": 0.2,
-                        "pit": 0.0,
-                        "wall": 0.0,
-                        "platform": 0.,
-                        "hollow stairs down": 0., 
-                        "hollow stairs up": 0.5,
-                        "parkour": 0.0,         # 0.2
-                        "parkour_hurdle": 0.,  # 0.2
-                        "parkour_flat": 0.0,
-                        "parkour_step": 0.,    # 0.2
-                        "parkour_gap": 0.,     # 0.2
-                        "demo": 0.0}            # 0.2
+                            "OLD 53 down": 0.,
+                            "OLD 53 up": 0.5,
+                            "NEW 53 down": 0.0,
+                            "NEW 53 up": 0.5,
+                            "MIXED down": 0., 
+                            "MIXED up": 0.5,
+                            "gaps": 0., 
+                            "flat": 0.,
+                            "pit": 0.0,
+                            "wall": 0.0,
+                            "platform": 0.,
+                            "hollow stairs down": 0., 
+                            "hollow stairs up": 0.5,
+                            "parkour": 0.0,         # 0.2
+                            "parkour_hurdle": 0.,  # 0.2
+                            "parkour_flat": 0.0,
+                            "parkour_step": 0.,    # 0.2
+                            "parkour_gap": 0.,     # 0.2
+                            "demo": 0.0}            # 0.2
         
         
         terrain_proportions = list(terrain_dict.values())
@@ -240,7 +240,7 @@ class LeggedRobotCfg(BaseConfig):
         slope_treshold = 1.5# slopes above this threshold will be corrected to vertical surfaces
         origin_zero_z = True
 
-        num_goals = 5
+        num_goals = 10
 
     class commands:
         curriculum = False

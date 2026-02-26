@@ -96,14 +96,14 @@ def play(args):
     #                                 "demo": 0.0}            # 0.2
 
     env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-                                    "normal stairs down": 0.0,
-                                    "normal stairs up": 0.,
-                                    "steep hollow stairs down": 0.0,
-                                    "steep hollow stairs up": 0.,
-                                    "discrete": 0., 
-                                    "stepping stones": 0.0,
+                                    "OLD 53 down": 0.,
+                                    "OLD 53 up": 0.5,
+                                    "NEW 53 down": 0.0,
+                                    "NEW 53 up": 0.5,
+                                    "MIXED down": 0., 
+                                    "MIXED up": 0.5,
                                     "gaps": 0., 
-                                    "flat": 0.,
+                                    "flat": 0.5,
                                     "pit": 0.0,
                                     "wall": 0.0,
                                     "platform": 0.,
@@ -111,7 +111,7 @@ def play(args):
                                     "hollow stairs up": 0.5,
                                     "parkour": 0.0,         # 0.2
                                     "parkour_hurdle": 0.0,  # 0.2
-                                    "parkour_flat": 0.,
+                                    "parkour_flat": 0.0,
                                     "parkour_step": 0.,    # 0.2
                                     "parkour_gap": 0.,     # 0.2
                                     "demo": 0.0}            # 0.2

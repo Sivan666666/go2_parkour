@@ -134,19 +134,19 @@ class Go2RoughCfg( LeggedRobotCfg ):
         far_clip = 2
 
         # 噪声总开关
-        enable_noise = True
+        enable_noise = False
 
-        noise_level = 1
+        noise_level = 0.1
 
-        dis_noise_prob = 0.7 * noise_level
-        dis_noise = 0.2 * noise_level
+        dis_noise_prob = 1
+        dis_noise = 0.1 * noise_level
 
         # 1. Clip: 近距离设为无穷
         clip_near_distance = 0.15  # 0.15m以内设为无穷大
 
         # 2. Edge noise: 边缘噪声
-        edge_noise_enable_prob = 0.7  #  80%概率启用边缘噪声
-        edge_noise_prob = 0.8  # 边缘处30%概率设为无穷
+        edge_noise_enable_prob = 1  #  80%概率启用边缘噪声
+        edge_noise_prob = 0.8 * noise_level # 边缘处30%概率设为无穷
         edge_gradient_threshold = 0.2  # 深度梯度阈值(米)
         edge_dilation_kernel_size = 3  # 边缘膨胀核大小
 
@@ -158,17 +158,18 @@ class Go2RoughCfg( LeggedRobotCfg ):
         perlin_noise_evolution_speed = 0.005  # 时间演化速度
 
         #  启用块状空洞 代替 柏林
-        hole_noise_enable_prob = 0.3      # 50% 概率启用块状空洞
-        hole_noise_prob = 0.15        # 5% 区域有空洞
-        hole_block_size = 10           # 10×10 像素的块
+        hole_noise_enable_prob = 1      # 50% 概率启用块状空洞
+        hole_noise_prob = 0.15 * noise_level       # 5% 区域有空洞
+        hole_block_size = int(10 * noise_level)          # 10×10 像素的块
+
 
         # 4. Blind spot: 去除左侧列
         blind_spot_left_columns = 0  # 去除左侧5列
 
         # 5. Gaussian noise: 高斯噪声
-        gaussian_noise_enable_prob = 0.3  #  80%概率启用高斯噪声
-        gaussian_noise_std = 0.02
-        gaussian_noise_distance_factor = 0.1
+        gaussian_noise_enable_prob = 1  #  80%概率启用高斯噪声
+        gaussian_noise_std = 0.02 * noise_level 
+        gaussian_noise_distance_factor = 0.1 * noise_level 
 
         # 6. Gaussian Blur: 最终平滑 (新增)
         apply_gaussian_blur = True  # 是否应用高斯模糊
@@ -176,11 +177,11 @@ class Go2RoughCfg( LeggedRobotCfg ):
         gaussian_blur_sigma = 1.0  # 标准差(越大越模糊)
 
         # 原有噪声
-        dropout_prob = 0.02
-        salt_pepper_prob = 0.02
+        dropout_prob = 0.02 * noise_level 
+        salt_pepper_prob = 0.02 * noise_level 
 
         # Gaussian shift
-        gaussian_shift_std = 5
+        gaussian_shift_std = 5 * noise_level 
 
 
         scale = 1
@@ -194,7 +195,7 @@ class Go2RoughCfg( LeggedRobotCfg ):
             # tracking rewards
             tracking_goal_vel = 2.5
             tracking_ang_vel = 0.5
-            tracking_pitch = 0.5
+            tracking_pitch = 1
             # tracking_lin_vel = 0.25
             # tracking_yaw = 0.05
             # regularization rewards
@@ -211,8 +212,8 @@ class Go2RoughCfg( LeggedRobotCfg ):
             smoothness = -0.001
             dof_error = -0.1
             feet_stumble = -1
-            feet_edge = -0.08
-            feet_hollow = -0.08
+            feet_edge = -1
+            feet_hollow = -1
 
             # feet_air_time = 0.01
             feet_contact_forces = -0.01

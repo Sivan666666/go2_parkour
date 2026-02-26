@@ -934,7 +934,7 @@ class LeggedRobot(BaseTask):
                 self._draw_goals()
                 # self._draw_feet()
                 self._draw_edge_mask()
-                self._draw_hollow_mask()  # 蓝色：空心板子高度
+                # self._draw_hollow_mask()  # 蓝色：空心板子高度
             if self.cfg.depth.use_camera:
                 window_name = "Depth Image"
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)

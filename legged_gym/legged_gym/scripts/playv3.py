@@ -75,10 +75,10 @@ def play(args):
     env_cfg.terrain.height = [0.02, 0.02]
 
     env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-                        "normal stairs down": 0.0,
-                        "normal stairs up": 0.,
-                        "steep hollow stairs down": 0.0,
-                        "steep hollow stairs up": 0.,
+                        "OLD 53 up": 0.5,
+                        "OLD 53 down": 0.,
+                        "NEW 53 down": 0.0,
+                        "NEW 53 up": 0.5,
                         "discrete": 0., 
                         "stepping stones": 0.0,
                         "gaps": 0., 
@@ -87,7 +87,7 @@ def play(args):
                         "wall": 0.0,
                         "platform": 0.,
                         "hollow stairs down": 0.0, 
-                        "hollow stairs up": 1.,
+                        "hollow stairs up": 0.5,
                         "parkour": 0.0,         # 0.2
                         "parkour_hurdle": 0.0,  # 0.2
                         "parkour_flat": 0.0,
@@ -349,7 +349,7 @@ def play(args):
     print("="*60)
     
     completed_envs = [x for x in success_rate_buffer if x is not None]
-    if completed_envs:
+    if completed_envs or True:
         success_count = sum(completed_envs)
         fail_count = len(completed_envs) - success_count
         total_count = len(completed_envs)
