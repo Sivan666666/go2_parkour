@@ -103,7 +103,7 @@ def play(args):
                                     "MIXED down": 0., 
                                     "MIXED up": 0.5,
                                     "gaps": 0., 
-                                    "flat": 0.5,
+                                    "flat": 0.,
                                     "pit": 0.0,
                                     "wall": 0.0,
                                     "platform": 0.,

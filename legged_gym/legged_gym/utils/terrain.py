@@ -193,11 +193,12 @@ class Terrain:
                 # print(f"Terrain choice={choice:.3f}, difficulty={difficulty:.3f}")
                 if random:
                     if max_difficulty:
-                        angle = 30
+                        angle = 40
                         radian = angle * np.pi / 180
                         t = np.tan(radian)
                         if angle > 37:
-                            dif = (2*t - 0.5) / (t + 0.85)
+                            dif = (2*t - 0.5) / (t + 0.85) # old
+                            dif = (2*t - 0.5) / (t + 0.64) # new
                         else:
                             dif = (2*t - 0.5) / (t + 0.25)
                         dif = 1
@@ -1616,7 +1617,7 @@ def hollow_stairs_terrain_mixed(terrain, step_height_first, step_height_others, 
         #     heightsamples[current_x_pos_px:current_x_pos_px + x_hollow_px, start_y:end_y] = 0
         #     current_x_pos_px += x_hollow_px
 
-        if (i < 10):
+        if (i < num_goals):
             step_height_others = 0.1 + np.random.uniform(0, 0.2) * difficulty
             is_steep = False
             add_noise = False

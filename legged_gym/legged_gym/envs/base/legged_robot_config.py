@@ -220,7 +220,7 @@ class LeggedRobotCfg(BaseConfig):
                             "MIXED down": 0., 
                             "MIXED up": 0.5,
                             "gaps": 0., 
-                            "flat": 0.,
+                            "flat": 0.5,
                             "pit": 0.0,
                             "wall": 0.0,
                             "platform": 0.,
@@ -327,7 +327,7 @@ class LeggedRobotCfg(BaseConfig):
         randomize_motor = True
         motor_strength_range = [0.6, 1.2]
 
-        delay_update_global_steps = 24 * 8000
+        delay_update_global_steps = 24 * 2000
         action_delay = False
         action_curr_step = [1, 1]
         action_curr_step_scratch = [0, 1]

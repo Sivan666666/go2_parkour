@@ -75,25 +75,25 @@ def play(args):
     env_cfg.terrain.height = [0.02, 0.02]
 
     env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-                        "OLD 53 up": 0.5,
-                        "OLD 53 down": 0.,
-                        "NEW 53 down": 0.0,
-                        "NEW 53 up": 0.5,
-                        "discrete": 0., 
-                        "stepping stones": 0.0,
-                        "gaps": 0., 
-                        "flat": 0.0,
-                        "pit": 0.0,
-                        "wall": 0.0,
-                        "platform": 0.,
-                        "hollow stairs down": 0.0, 
-                        "hollow stairs up": 0.5,
-                        "parkour": 0.0,         # 0.2
-                        "parkour_hurdle": 0.0,  # 0.2
-                        "parkour_flat": 0.0,
-                        "parkour_step": 0.0,    # 0.2
-                        "parkour_gap": 0.0,     # 0.2
-                        "demo": 0.0}            # 0.2
+                                    "OLD 53 down": 0.,
+                                    "OLD 53 up": 0.,
+                                    "NEW 53 down": 0.0,
+                                    "NEW 53 up": 0.,
+                                    "MIXED down": 0., 
+                                    "MIXED up": 1.,
+                                    "gaps": 0., 
+                                    "flat": 0.,
+                                    "pit": 0.0,
+                                    "wall": 0.0,
+                                    "platform": 0.,
+                                    "hollow stairs down": 0.0, 
+                                    "hollow stairs up": 0.,
+                                    "parkour": 0.0,         # 0.2
+                                    "parkour_hurdle": 0.0,  # 0.2
+                                    "parkour_flat": 0.0,
+                                    "parkour_step": 0.,    # 0.2
+                                    "parkour_gap": 0.,     # 0.2
+                                    "demo": 0.0}            # 0.2
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
@@ -365,7 +365,7 @@ def play(args):
         # 这里假设 env.cur_goal_idx 表示当前正在尝试的那个目标索引（也就是已经完成了 idx 个目标）
         # 总目标数通常为 num_goals - 1 (排除起点) 或者就是 num_goals
         # 根据之前代码逻辑: last_goal = env.env_goals[env_id, num_goals-1, :2]
-        total_waypoints = 5
+        total_waypoints = num_goals
         avg_reached_waypoint_pct = 100 * np.mean(reached_waypoint) / total_waypoints
         print(f"平均到达进度: {avg_reached_waypoint_pct:.1f}%")
 
