@@ -60,6 +60,9 @@ import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
 
+save_dir = "depth_visualizations"
+os.makedirs(save_dir, exist_ok=True)
+
 @torch.no_grad()
 def resize2d(img: torch.Tensor, size):
     # img: [N, C, H, W] 或 [C, H, W]，size: (out_h, out_w)
@@ -593,8 +596,75 @@ class LeggedRobot(BaseTask):
         """处理深度图像 (全 GPU 优化版本)"""
         
         depth_images = self.crop_depth_image(depth_images)
+
+        # 1) 近距离置为 -far_clip
+        distance = torch.abs(depth_images)
+        near_mask = distance < self.cfg.depth.clip_near_distance
+        depth_images = depth_images.clone()
+        depth_images[near_mask] = -self.cfg.depth.far_clip
         # depth_images += self.cfg.depth.dis_noise * 2 * (torch.rand(1, device=self.device)-0.5)[0] 
         
+        # --- 用于可视化的辅助保存函数 ---
+        save_viz = (self.global_counter % 10 == 0) # 每500步保存一次
+        save_viz = False
+        viz_env_id = 0 # 只保存第0个环境
+        
+        if save_viz:
+             # 原始/理想图像
+             # 注意：原始深度图通常是负值 (近处大如-0.1, 远处小如-10)
+             viz_img = depth_images[viz_env_id].clone()
+             
+             # 1. 解决第一张图全黑问题：Clip 到合理范围，消除 -inf 或极远背景对归一化的影响
+             # 假设相机只能看10米远，超过的都截断。注意原始值是负的，所以 clip(-10, 0)
+             viz_img = torch.clip(viz_img, -2.0, -0.15) 
+             
+             viz_original = viz_img.cpu().numpy()
+             
+             # 方案：转成正距离 -> 0 (近, 黑) 到 10 (远, 白)
+             viz_original = -viz_original # 现在是 0(近) 到 10(远)
+             viz_original = (viz_original - viz_original.min()) / (viz_original.max() - viz_original.min() + 1e-6) * 255
+             
+             cv2.imwrite(os.path.join(save_dir, f"step_{self.global_counter}_0_original.png"), viz_original.astype(np.uint8))
+
+        depth_images = torch.clip(depth_images , -self.cfg.depth.far_clip, -self.cfg.depth.near_clip)
+        # 3) 边缘噪声（仅对启用的环境）
+        if hasattr(self.cfg.depth, 'edge_noise_prob') and self.cfg.depth.edge_noise_prob > 0:
+            # 计算梯度
+            grad_x = torch.zeros_like(depth_images)
+            grad_x[:, :, 1:-1] = (depth_images[:, :, 2:] - depth_images[:, :, :-2]) / 2
+            grad_x[:, :, 0] = depth_images[:, :, 1] - depth_images[:, :, 0]
+            grad_x[:, :, -1] = depth_images[:, :, -1] - depth_images[:, :, -2]
+
+            grad_y = torch.zeros_like(depth_images)
+            grad_y[:, 1:-1, :] = (depth_images[:, 2:, :] - depth_images[:, :-2, :]) / 2
+            grad_y[:, 0, :] = depth_images[:, 1, :] - depth_images[:, 0, :]
+            grad_y[:, -1, :] = depth_images[:, -1, :] - depth_images[:, -2, :]
+
+            gradient_magnitude = torch.sqrt(grad_x ** 2 + grad_y ** 2)
+            edge_mask = gradient_magnitude > self.cfg.depth.edge_gradient_threshold
+
+            # 膨胀
+            kernel_size = self.cfg.depth.edge_dilation_kernel_size
+            edge_4d = edge_mask.float().unsqueeze(1)               # [N,1,H,W]
+            edge_dilated = torch.nn.functional.max_pool2d(
+                edge_4d, kernel_size=kernel_size, stride=1, padding=kernel_size // 2
+            ).squeeze(1).bool()                                    # [N,H,W]
+
+            random_mask = torch.rand_like(depth_images) < self.cfg.depth.edge_noise_prob
+            edge_noise_mask = edge_dilated & random_mask
+
+            apply_mask = self.env_has_edge_noise[:, None, None].expand_as(depth_images)
+            depth_images[edge_noise_mask & apply_mask] = -self.cfg.depth.far_clip
+
+            # --- 保存加了高斯噪声后的图 ---
+        if save_viz:
+                viz_gaussian = depth_images[viz_env_id].clone().cpu().numpy()
+                viz_gaussian = (viz_gaussian - viz_gaussian.min()) / (viz_gaussian.max() - viz_gaussian.min() + 1e-6) * 255
+                viz_gaussian = 255 - viz_gaussian  # 反转颜色
+                cv2.imwrite(os.path.join(save_dir, f"step_{self.global_counter}_1_edge_noise.png"), viz_gaussian.astype(np.uint8))
+
+
+
         depth_images = - depth_images
         # normalize_depth_fn = lambda x: normalize_depth(x, 0.15, 2, is_log=False)
         # print("depth image min/max before model:", depth_images.min().item(), depth_images.max().item())
@@ -604,7 +674,17 @@ class LeggedRobot(BaseTask):
         # print("depth image min/max after model:", depth_images.min().item(), depth_images.max().item())
         depth_images = - depth_images
         """处理深度图像 (全 GPU 优化版本)"""
+
+         # --- 保存加了高斯噪声后的图 ---
+        if save_viz:
+            viz_gaussian = depth_images[viz_env_id].clone().cpu().numpy()
+            viz_gaussian = (viz_gaussian - viz_gaussian.min()) / (viz_gaussian.max() - viz_gaussian.min() + 1e-6) * 255
+            viz_gaussian = 255 - viz_gaussian  # 反转颜色
+            cv2.imwrite(os.path.join(save_dir, f"step_{self.global_counter}_2_depth_model_noise.png"), viz_gaussian.astype(np.uint8))
+
         
+        
+
         if getattr(self.cfg.depth, 'enable_noise', True):
             # 1) 近距离置为 -far_clip
             distance = torch.abs(depth_images)
@@ -612,11 +692,55 @@ class LeggedRobot(BaseTask):
             depth_images = depth_images.clone()
             depth_images[near_mask] = -self.cfg.depth.far_clip
 
+            # # 3) 边缘噪声（仅对启用的环境）
+            # if hasattr(self.cfg.depth, 'edge_noise_prob') and self.cfg.depth.edge_noise_prob > 0:
+            #     # 计算梯度
+            #     grad_x = torch.zeros_like(depth_images)
+            #     grad_x[:, :, 1:-1] = (depth_images[:, :, 2:] - depth_images[:, :, :-2]) / 2
+            #     grad_x[:, :, 0] = depth_images[:, :, 1] - depth_images[:, :, 0]
+            #     grad_x[:, :, -1] = depth_images[:, :, -1] - depth_images[:, :, -2]
+
+            #     grad_y = torch.zeros_like(depth_images)
+            #     grad_y[:, 1:-1, :] = (depth_images[:, 2:, :] - depth_images[:, :-2, :]) / 2
+            #     grad_y[:, 0, :] = depth_images[:, 1, :] - depth_images[:, 0, :]
+            #     grad_y[:, -1, :] = depth_images[:, -1, :] - depth_images[:, -2, :]
+
+            #     gradient_magnitude = torch.sqrt(grad_x ** 2 + grad_y ** 2)
+            #     edge_mask = gradient_magnitude > self.cfg.depth.edge_gradient_threshold
+
+            #     # 膨胀
+            #     kernel_size = self.cfg.depth.edge_dilation_kernel_size
+            #     edge_4d = edge_mask.float().unsqueeze(1)               # [N,1,H,W]
+            #     edge_dilated = torch.nn.functional.max_pool2d(
+            #         edge_4d, kernel_size=kernel_size, stride=1, padding=kernel_size // 2
+            #     ).squeeze(1).bool()                                    # [N,H,W]
+
+            #     random_mask = torch.rand_like(depth_images) < self.cfg.depth.edge_noise_prob
+            #     edge_noise_mask = edge_dilated & random_mask
+
+            #     apply_mask = self.env_has_edge_noise[:, None, None].expand_as(depth_images)
+            #     depth_images[edge_noise_mask & apply_mask] = -self.cfg.depth.far_clip
+
+            #  # --- 保存加了高斯噪声后的图 ---
+            # if save_viz:
+            #      viz_gaussian = depth_images[viz_env_id].clone().cpu().numpy()
+            #      viz_gaussian = (viz_gaussian - viz_gaussian.min()) / (viz_gaussian.max() - viz_gaussian.min() + 1e-6) * 255
+            #      viz_gaussian = 255 - viz_gaussian  # 反转颜色
+            #      cv2.imwrite(os.path.join(save_dir, f"step_{self.global_counter}_3_edge_noise.png"), viz_gaussian.astype(np.uint8))
+
 
             if hasattr(self.cfg.depth, 'dis_noise_prob'):
                 noise = self.cfg.depth.dis_noise * 2 * (torch.rand_like(depth_images, device=self.device) - 0.5)
                 apply_mask = self.env_has_dis_noise[:, None, None].expand_as(depth_images)
                 depth_images[apply_mask] = depth_images[apply_mask] + noise[apply_mask]
+
+            # --- 保存加了均匀噪声后的图 ---
+            if save_viz:
+                 viz_uniform = depth_images[viz_env_id].clone().cpu().numpy()
+                 viz_uniform = (viz_uniform - viz_uniform.min()) / (viz_uniform.max() - viz_uniform.min() + 1e-6) * 255
+                 viz_uniform = 255 - viz_uniform  # 反转颜色
+                 cv2.imwrite(os.path.join(save_dir, f"step_{self.global_counter}_3_uniform_noise.png"), viz_uniform.astype(np.uint8))
+
 
             # 2) 高斯噪声（仅对启用的环境）
             if hasattr(self.cfg.depth, 'gaussian_noise_std') and self.cfg.depth.gaussian_noise_std > 0:
@@ -632,34 +756,15 @@ class LeggedRobot(BaseTask):
                 apply_mask = self.env_has_gaussian_noise[:, None, None].expand_as(depth_images)
                 depth_images[apply_mask] = depth_images[apply_mask] + gaussian_noise[apply_mask]
 
-            # 3) 边缘噪声（仅对启用的环境）
-            if hasattr(self.cfg.depth, 'edge_noise_prob') and self.cfg.depth.edge_noise_prob > 0:
-                # 计算梯度
-                grad_x = torch.zeros_like(depth_images)
-                grad_x[:, :, 1:-1] = (depth_images[:, :, 2:] - depth_images[:, :, :-2]) / 2
-                grad_x[:, :, 0] = depth_images[:, :, 1] - depth_images[:, :, 0]
-                grad_x[:, :, -1] = depth_images[:, :, -1] - depth_images[:, :, -2]
+             # --- 保存加了高斯噪声后的图 ---
+            if save_viz:
+                 viz_gaussian = depth_images[viz_env_id].clone().cpu().numpy()
+                 viz_gaussian = (viz_gaussian - viz_gaussian.min()) / (viz_gaussian.max() - viz_gaussian.min() + 1e-6) * 255
+                 viz_gaussian = 255 - viz_gaussian  # 反转颜色
+                 cv2.imwrite(os.path.join(save_dir, f"step_{self.global_counter}_4_gaussian_noise.png"), viz_gaussian.astype(np.uint8))
 
-                grad_y = torch.zeros_like(depth_images)
-                grad_y[:, 1:-1, :] = (depth_images[:, 2:, :] - depth_images[:, :-2, :]) / 2
-                grad_y[:, 0, :] = depth_images[:, 1, :] - depth_images[:, 0, :]
-                grad_y[:, -1, :] = depth_images[:, -1, :] - depth_images[:, -2, :]
 
-                gradient_magnitude = torch.sqrt(grad_x ** 2 + grad_y ** 2)
-                edge_mask = gradient_magnitude > self.cfg.depth.edge_gradient_threshold
-
-                # 膨胀
-                kernel_size = self.cfg.depth.edge_dilation_kernel_size
-                edge_4d = edge_mask.float().unsqueeze(1)               # [N,1,H,W]
-                edge_dilated = torch.nn.functional.max_pool2d(
-                    edge_4d, kernel_size=kernel_size, stride=1, padding=kernel_size // 2
-                ).squeeze(1).bool()                                    # [N,H,W]
-
-                random_mask = torch.rand_like(depth_images) < self.cfg.depth.edge_noise_prob
-                edge_noise_mask = edge_dilated & random_mask
-
-                apply_mask = self.env_has_edge_noise[:, None, None].expand_as(depth_images)
-                depth_images[edge_noise_mask & apply_mask] = -self.cfg.depth.far_clip
+            
 
             # 4) 块状随机空洞（仅对启用的环境）
             if hasattr(self.cfg.depth, 'hole_noise_prob'):
@@ -677,6 +782,14 @@ class LeggedRobot(BaseTask):
                 apply_mask = self.env_has_hole_noise[:, None, None].expand_as(depth_images)
                 depth_images[hole_mask & apply_mask] = -self.cfg.depth.far_clip
 
+             # --- 保存加了高斯噪声后的图 ---
+            if save_viz:
+                 viz_gaussian = depth_images[viz_env_id].clone().cpu().numpy()
+                 viz_gaussian = (viz_gaussian - viz_gaussian.min()) / (viz_gaussian.max() - viz_gaussian.min() + 1e-6) * 255
+                 viz_gaussian = 255 - viz_gaussian  # 反转颜色
+                 cv2.imwrite(os.path.join(save_dir, f"step_{self.global_counter}_5_hole_noise.png"), viz_gaussian.astype(np.uint8))
+
+
             # 5) Dropout
             if hasattr(self.cfg.depth, 'dropout_prob') and self.cfg.depth.dropout_prob > 0:
                 dropout_mask = torch.rand_like(depth_images) < self.cfg.depth.dropout_prob
@@ -689,6 +802,14 @@ class LeggedRobot(BaseTask):
                 pepper_mask = torch.rand_like(depth_images) < p
                 depth_images[salt_mask] = -self.cfg.depth.far_clip
                 depth_images[pepper_mask] = -self.cfg.depth.near_clip
+
+             # --- 保存加了高斯噪声后的图 ---
+            if save_viz:
+                 viz_gaussian = depth_images[viz_env_id].clone().cpu().numpy()
+                 viz_gaussian = (viz_gaussian - viz_gaussian.min()) / (viz_gaussian.max() - viz_gaussian.min() + 1e-6) * 255
+                 viz_gaussian = 255 - viz_gaussian  # 反转颜色
+                 cv2.imwrite(os.path.join(save_dir, f"step_{self.global_counter}_6_dropout_salt_pepper_noise.png"), viz_gaussian.astype(np.uint8))
+
 
             # ========================== 新增部分 ==========================
             # 7) Gaussian Shift (空间抖动/错位)
@@ -721,6 +842,13 @@ class LeggedRobot(BaseTask):
                 # 恢复形状 (N, H, W)
                 depth_images = depth_shifted.squeeze(1)
             # ==============================================================
+            
+            # --- 保存加了 Gaussian Shift 后的图 ---
+            if save_viz:
+                 viz_shift = depth_images[viz_env_id].clone().cpu().numpy()
+                 viz_shift = (viz_shift - viz_shift.min()) / (viz_shift.max() - viz_shift.min() + 1e-6) * 255
+                 viz_shift = 255 - viz_shift  # 反转颜色
+                 cv2.imwrite(os.path.join(save_dir, f"step_{self.global_counter}_7_gaussian_shift.png"), viz_shift.astype(np.uint8))
 
 
             
@@ -764,6 +892,13 @@ class LeggedRobot(BaseTask):
                 groups=1
             ).squeeze(1)  # [N,H,W]
             # print("apply_gaussian_blur")
+        # --- 保存加了 Gaussian Shift 后的图 ---
+            if save_viz:
+                 viz_shift = depth_images[viz_env_id].clone().cpu().numpy()
+                 viz_shift = (viz_shift - viz_shift.min()) / (viz_shift.max() - viz_shift.min() + 1e-6) * 255
+                 # viz_shift = 255 - viz_shift  # 反转颜色
+                 cv2.imwrite(os.path.join(save_dir, f"step_{self.global_counter}_8_gaussian_blur.png"), viz_shift.astype(np.uint8))
+    
 
         
         

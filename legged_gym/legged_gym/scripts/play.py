@@ -99,7 +99,7 @@ def play(args):
                                     "normal stairs down": 0.0,
                                     "normal stairs up": 0.,
                                     "steep hollow stairs down": 0.0,
-                                    "steep hollow stairs up": 0.,
+                                    "steep hollow stairs up": 0.5,
                                     "discrete": 0., 
                                     "stepping stones": 0.0,
                                     "gaps": 0., 
