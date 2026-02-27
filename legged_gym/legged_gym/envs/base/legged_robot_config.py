@@ -218,9 +218,9 @@ class LeggedRobotCfg(BaseConfig):
                             "NEW 53 down": 0.0,
                             "NEW 53 up": 0.5,
                             "MIXED down": 0., 
-                            "MIXED up": 0.5,
+                            "MIXED up": 0.2,
                             "gaps": 0., 
-                            "flat": 0.5,
+                            "flat": 0.2,
                             "pit": 0.0,
                             "wall": 0.0,
                             "platform": 0.,
@@ -240,7 +240,7 @@ class LeggedRobotCfg(BaseConfig):
         slope_treshold = 1.5# slopes above this threshold will be corrected to vertical surfaces
         origin_zero_z = True
 
-        num_goals = 10
+        num_goals = 5
 
     class commands:
         curriculum = False

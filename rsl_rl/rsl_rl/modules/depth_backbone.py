@@ -1110,7 +1110,7 @@ class RecurrentDepthBackbone_TASM(nn.Module):
 # RecurrentDepthBackbone = RecurrentDepthBackbone_Attention
 # DepthOnlyFCBackbone58x87 = DepthResNetBackbone
 
-# RecurrentDepthBackbone = RecurrentDepthBackbone_TASM
-# DepthOnlyFCBackbone58x87 = DepthBackbone_TASM
-RecurrentDepthBackbone = RecurrentDepthBackbone_Original
-DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original
+RecurrentDepthBackbone = RecurrentDepthBackbone_TASM
+DepthOnlyFCBackbone58x87 = DepthBackbone_TASM
+# RecurrentDepthBackbone = RecurrentDepthBackbone_Original
+# DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original
