@@ -1112,3 +1112,6 @@ class RecurrentDepthBackbone_TASM(nn.Module):
 
 RecurrentDepthBackbone = RecurrentDepthBackbone_Original
 DepthOnlyFCBackbone58x87 = DepthOnlyFCBackbone58x87_Original
+
+# RecurrentDepthBackbone = RecurrentDepthBackbone_TASM
+# DepthOnlyFCBackbone58x87 = DepthBackbone_TASM

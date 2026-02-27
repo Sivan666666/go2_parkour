@@ -3,3 +3,5 @@ isaacgym*
 .vscode/
 *img
 .logs/
+.legged_gym/scripts/depth_visualizations/
+.legged_gym/scripts/depth_choose
