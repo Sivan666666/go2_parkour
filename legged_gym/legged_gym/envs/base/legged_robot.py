@@ -60,6 +60,8 @@ import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
 
+import pandas as pd
+
 save_dir = "depth_visualizations"
 os.makedirs(save_dir, exist_ok=True)
 
@@ -515,7 +517,7 @@ class LeggedRobot(BaseTask):
         self.init_done = True
         self.global_counter = 0
         self.total_env_steps_counter = 0
-
+        self.hollow_step_recorded_points = []
         self.reset_idx(torch.arange(self.num_envs, device=self.device))
         self.post_physics_step()
 
@@ -1512,7 +1514,81 @@ class LeggedRobot(BaseTask):
                 self.measured_heights = self._get_heights()
         if self.cfg.domain_rand.push_robots and  (self.common_step_counter % self.cfg.domain_rand.push_interval == 0):
             self._push_robots()
+        # self._record_hollow_stairs_footsets()
+    
+    def _record_hollow_stairs_footsets(self):
+        # 1. 地形几何参数 (建议从 cfg 读取，这里保持你提供的硬编码用于测试)
+        difficulty = 0.99 
         
+        step_width = (0.4 - 0.2 * difficulty) * 2
+        birth_area_length = 2.0 + step_width
+        # 根据你的设置，y_start 和 y_end 定义了台阶的横向有效宽度
+        y_start = -0.4
+        y_end = 0.4
+        
+        # 2. 获取脚部触地掩码 (num_envs, 4)
+        # 仅检测 Z 轴向上的垂直支撑力
+        contact_mask = self.contact_forces[:, self.feet_indices, 2] > 2.0 
+        
+        # 3. 获取局部坐标 (num_envs, 4, 3)
+        feet_pos_local = self.feet_pos - self.env_origins.view(-1, 1, 3)
+        x_pos = feet_pos_local[..., 0]
+        y_pos = feet_pos_local[..., 1]
+
+        # 4. 联合判定掩码 (关键：只有触地且在坐标框内的脚，对应的 True 位才会被记录)
+        # is_on_first_step 的 shape 为 (num_envs, 4)
+        is_on_first_step = (
+            contact_mask & 
+            (x_pos >= birth_area_length) & 
+            (x_pos <= birth_area_length + step_width) &
+            (y_pos >= y_start) &
+            (y_pos <= y_end)
+        )
+        
+        # 5. 提取并记录
+        if torch.any(is_on_first_step):
+            # 找到所有满足条件的 env 索引和 foot 索引
+            # env_indices, foot_indices 分别为满足条件点的坐标
+            env_indices, foot_indices = torch.where(is_on_first_step)
+            
+            # 提取这些特定点的位置
+            valid_x = x_pos[is_on_first_step]
+            valid_y = y_pos[is_on_first_step]
+            
+            # 转换为局部坐标并存入列表
+            for i in range(len(valid_x)):
+                dx = valid_x[i].item() - birth_area_length
+                dy = valid_y[i].item() - y_start
+                
+                # 记录数据
+                self.hollow_step_recorded_points.append([dx, dy])
+                
+                # 可视化调试打印
+                current_env = env_indices[i].item()
+                if current_env == 1: # 仅观察 env 1
+                    print(f"[Record] Env {current_env}, Foot {foot_indices[i].item()}: "
+                        f"dx={dx:.3f}, dy={dy:.3f}")
+        # 2. 定期保存 (例如每存满 500 个点保存一次，防止数据丢失)
+        if len(self.hollow_step_recorded_points) >= 50:
+            # self.save_footprints_to_csv()
+            self.save_footprints_to_csv('hollow_step_footprints.csv')
+
+    def save_footprints_to_csv(self, filename='hollow_step_footprints_without_foothold.csv'):
+        if not self.hollow_step_recorded_points:
+            return
+            
+        # 转换为 DataFrame
+        df = pd.DataFrame(self.hollow_step_recorded_points, columns=['dx', 'dy'])
+        
+        # 如果文件不存在，写入表头；如果存在，追加模式写入且不写表头
+        file_exists = os.path.isfile(filename)
+        df.to_csv(filename, mode='a', index=False, header=not file_exists)
+        
+        # 清空内存列表，防止重复保存
+        self.hollow_step_recorded_points = []
+        print(f"已将落足点数据追加保存至 {filename}")
+                
+
     def _gather_cur_goals(self, future=0):
         return self.env_goals.gather(1, (self.cur_goal_idx[:, None, None]+future).expand(-1, -1, self.env_goals.shape[-1])).squeeze(1)
 
