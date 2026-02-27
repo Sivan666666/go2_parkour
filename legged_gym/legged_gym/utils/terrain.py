@@ -158,7 +158,7 @@ class Terrain:
                 
                 # 统一进行膨胀处理，使边缘变成一个可感知的区域 edge_width_thresh = 5cm
                 half_edge_width = int(self.cfg.edge_width_thresh / self.cfg.horizontal_scale)
-                structure = np.ones((half_edge_width*2, 1))
+                structure = np.ones((max(half_edge_width * 2, 1), 1))
                 self.x_edge_mask = binary_dilation(self.x_edge_mask, structure=structure)
                 if self.cfg.simplify_grid:
                     mesh_simplifier = pyfqmr.Simplify()
