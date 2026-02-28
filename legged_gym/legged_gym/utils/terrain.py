@@ -337,7 +337,7 @@ class Terrain:
             )
             self.add_roughness(terrain)
         elif choice < self.proportions[6]:
-            idx = 4
+            idx = 6
             step_height_first = 0.1 + 0.12 * difficulty
             step_height_others = 0.1 + 0.13 * difficulty
 
@@ -357,7 +357,7 @@ class Terrain:
                 raise ValueError("楼梯太多或太宽，platform_size为负，请调整参数！")
 
             if choice<self.proportions[5]:
-                idx = 5 
+                idx = 7
                 step_height_first *= -1
                 step_height_others *= -1
             hollow_stairs_terrain_mixed(
