@@ -2518,6 +2518,9 @@ class LeggedRobot(BaseTask):
     
         self.feet_at_edge = self.contact_filt & feet_at_edge
         rew = (self.terrain_levels > 3) * torch.sum(self.feet_at_edge, dim=-1)
+
+        rew[self.env_class == 5] = 0
+
         return rew
 
     def _reward_base_height(self):

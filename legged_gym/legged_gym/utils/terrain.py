@@ -694,7 +694,7 @@ def gap_parkour_terrain(terrain, difficulty, platform_size=2.):
     #             if terrain.height_field_raw[i, j] < height:
     #                 terrain.height_field_raw[i, j] = int(height)
 
-def flat_terrain(terrain, num_goals=10):
+def flat_terrain(terrain, num_goals=5):
     """
     生成一个完全平坦的地形，并在其上均匀分布目标点。
 

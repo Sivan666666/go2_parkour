@@ -212,8 +212,8 @@ class Go2RoughCfg( LeggedRobotCfg ):
             smoothness = -0.001
             dof_error = -0.1
             feet_stumble = -1
-            feet_edge = -0.08
-            feet_hollow = -0.08
+            feet_edge = -2
+            feet_hollow = -10
 
             # feet_air_time = 0.01
             feet_contact_forces = -0.01
