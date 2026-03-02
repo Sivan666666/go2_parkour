@@ -103,7 +103,7 @@ def play(args):
                                     "discrete": 0., 
                                     "stepping stones": 0.0,
                                     "gaps": 0., 
-                                    "flat": 0.,
+                                    "flat": 0.5,
                                     "pit": 0.0,
                                     "wall": 0.0,
                                     "platform": 0.,

@@ -268,8 +268,11 @@ class Terrain:
             self.add_roughness(terrain, difficulty)
         elif choice < self.proportions[4]:
             idx = 4
-            step_height_first = 0.1 + 0.12 * difficulty
-            step_height_others = 0.1 + 0.13 * difficulty
+            step_height_first = 0.1 + 0.12 * 9 / 7 * difficulty
+            step_height_others = 0.1 + 0.13 * 9 / 7  * difficulty
+
+            print("step_height_first",step_height_first)
+            print("step_height_others",step_height_others)
 
             num_goals = 8
             num_steps = num_goals - 1
@@ -369,8 +372,8 @@ class Terrain:
             self.add_roughness(terrain, difficulty=1)
         elif choice < self.proportions[13]:
             # step_height = 0.1 + 0.3 * difficulty
-            step_height_first = 0.1 + 0.05 * difficulty
-            step_height_others = 0.1 + 0.05 * difficulty
+            step_height_first = 0.1 + 0.05 * 9 / 7* difficulty
+            step_height_others = 0.1 + 0.05 * 9 / 7* difficulty
             idx = 13
 
             num_goals = 8
@@ -928,12 +931,12 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
         # --- [修正] 如果是陡峭模式，在 i-1 和 i 级之间插入中间台阶 ---
         if is_steep and i > 0:
             mid_step_width_m = step_width_m / 2.0
-            mid_height_m = (prev_height_m + current_height_m) / 2.0
+            mid_height_m = (prev_height_m + current_height_m) / 2.0 + (current_height_m - prev_height_m) * np.random.uniform(-0.02, 0.02)
             mid_step_width_px = int(mid_step_width_m / terrain.horizontal_scale)
-            
+    
             # 物理起始位置
-            mid_x_pos_m = current_x_pos_px * terrain.horizontal_scale
-            
+            mid_x_pos_m = current_x_pos_px * terrain.horizontal_scale + np.random.uniform(-0.03, 0.03)
+            mid_x_pos_px = int(mid_x_pos_m / terrain.horizontal_scale)
             # 1. 创建中间台阶网格 
             # (center 在 mid_x_pos_m - mid_step_width_m/2 意味着它占据 [current_x - 10, current_x] 的空间)
             mid_vertices, mid_triangles = trimesh.box_trimesh(
@@ -944,8 +947,8 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
 
             # 2. 为 heightsamples 赋值 [核心修改]
             # 将索引向后移动半个长度，使其位于 current_x_pos_px 之前
-            mid_x_s = current_x_pos_px - mid_step_width_px
-            mid_x_e = current_x_pos_px
+            mid_x_s = mid_x_pos_px - mid_step_width_px
+            mid_x_e = mid_x_pos_px
             mid_h_val = int(mid_height_m / terrain.vertical_scale)
             
             # 填充高度采样
@@ -1023,9 +1026,20 @@ def hollow_stairs_terrain(terrain, step_height_first, step_height_others, slope_
         # final_trimesh = step_trimesh
         terrain.trimeshes.append(final_trimesh)
         # terrain.trimeshes.append(trimesh_template)
+
+        # 定义候选值
+        elements = [0, 1]
+
+        # 定义对应的概率：0 占 50%，其余两个平分剩余的 50%
+        weights = [0.8, 0.2]
+
+        # 抽取一个值
+        current_x_pos_px_noise = np.random.choice(elements, p=weights)
  
         goals_m.append([center_x_m, center_y_m, current_height_m])
-        current_x_pos_px += step_width_px
+        current_x_pos_px += step_width_px + current_x_pos_px_noise
+        # print(int(np.random.uniform(0.05, 0.05) / terrain.horizontal_scale) )
+        # current_x_pos_px += step_width_px + int(np.random.uniform(-0.05, 0.05) / terrain.horizontal_scale) # 加入微小随机扰动避免完全规则
 
     # --- 5. 创建顶部平台 ---
     current_height_m += step_height_others
