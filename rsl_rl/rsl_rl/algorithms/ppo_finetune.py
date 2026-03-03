@@ -90,7 +90,7 @@ class PPO_finetune:
         self.schedule = schedule
         
         # for finetune
-        learning_rate = 1e-8
+        learning_rate = 1e-4
         entropy_coef = 0.003
         clip_param = 0.1
         max_grad_norm = 1.0
