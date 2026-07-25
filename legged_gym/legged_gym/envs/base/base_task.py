@@ -53,9 +53,10 @@ class BaseTask():
         else:
             self.device = 'cpu'
 
-        # graphics device for rendering, -1 for no rendering
+        # Headless camera observations still require a graphics context. Disable
+        # graphics only for policies that do not consume rendered depth.
         self.graphics_device_id = self.sim_device_id
-        if self.headless == True:
+        if self.headless and not cfg.depth.use_camera:
             self.graphics_device_id = -1
 
         self.num_envs = cfg.env.num_envs
