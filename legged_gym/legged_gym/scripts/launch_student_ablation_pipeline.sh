@@ -7,7 +7,7 @@ LOG_ROOT="$REPO_ROOT/legged_gym/logs/aaai_ablation"
 RESULT_ROOT="$REPO_ROOT/legged_gym/results/aaai_ablation"
 MANIFEST="$SCRIPT_DIR/manifests/hollow_stairs_v1.json"
 CONDA_SETUP="/home/ps/miniconda3/etc/profile.d/conda.sh"
-CONDA_ENV="txc_go2parkour"
+CONDA_ENV="${CONDA_ENV:-txc_go2parkour}"
 PIPELINE_LOG="$LOG_ROOT/student_pipeline.log"
 TEACHER_RUN="AAAI-T2-FULL-S1"
 TEACHER_CHECKPOINT=5000
@@ -57,7 +57,7 @@ start_eval_job() {
   mkdir -p "$output_dir"
   tmux kill-session -t "$session" 2>/dev/null || true
   tmux new-session -d -s "$session" \
-    "bash -lc 'source $CONDA_SETUP && conda activate $CONDA_ENV && cd $SCRIPT_DIR && PYTHONUNBUFFERED=1 python run_eval_suite.py --exptid $run --checkpoint $checkpoint --reward_profile current_full --suite full --manifest $MANIFEST --episodes 200 --device cuda:$gpu --proj_name aaai_ablation --output_dir $output_dir --policy_variant $variant --use_camera --delay > $output_dir/eval.log 2>&1'"
+    "bash -lc 'source $CONDA_SETUP && conda activate $CONDA_ENV && export LD_LIBRARY_PATH=\$CONDA_PREFIX/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH} && cd $SCRIPT_DIR && PYTHONUNBUFFERED=1 python run_eval_suite.py --exptid $run --checkpoint $checkpoint --reward_profile current_full --suite full --manifest $MANIFEST --episodes 200 --device cuda:$gpu --proj_name aaai_ablation --output_dir $output_dir --policy_variant $variant --use_camera --delay > $output_dir/eval.log 2>&1'"
 }
 
 teacher_path="$LOG_ROOT/$TEACHER_RUN/model_${TEACHER_CHECKPOINT}.pt"
@@ -69,6 +69,7 @@ echo "$(timestamp) teacher checkpoint is ready: $teacher_path"
 
 source "$CONDA_SETUP"
 conda activate "$CONDA_ENV"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cd "$SCRIPT_DIR"
 
 echo "$(timestamp) smoke-testing student variants"
@@ -114,13 +115,13 @@ for index in 0 1 2; do
   mkdir -p "$LOG_ROOT/$run"
   tmux kill-session -t "$run" 2>/dev/null || true
   tmux new-session -d -s "$run" \
-    "bash -lc 'source $CONDA_SETUP && conda activate $CONDA_ENV && cd $SCRIPT_DIR && PYTHONUNBUFFERED=1 python train.py --task go2 --exptid $run --proj_name aaai_ablation --device cuda:$gpu --seed 1 --max_iterations 6000 --save_interval 500 --reward_profile current_full --policy_variant $variant --resume --resumeid $TEACHER_RUN --checkpoint $TEACHER_CHECKPOINT --use_camera --delay --no_wandb > $LOG_ROOT/$run/run.log 2>&1'"
+    "bash -lc 'source $CONDA_SETUP && conda activate $CONDA_ENV && export LD_LIBRARY_PATH=\$CONDA_PREFIX/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH} && cd $SCRIPT_DIR && PYTHONUNBUFFERED=1 python train.py --task go2 --exptid $run --proj_name aaai_ablation --device cuda:$gpu --seed 1 --max_iterations 6000 --save_interval 500 --reward_profile current_full --policy_variant $variant --resume --resumeid $TEACHER_RUN --checkpoint $TEACHER_CHECKPOINT --use_camera --delay --no_wandb > $LOG_ROOT/$run/run.log 2>&1'"
 done
 
 monitor_session="AAAI-STUDENT-STOP-MONITOR"
 tmux kill-session -t "$monitor_session" 2>/dev/null || true
 tmux new-session -d -s "$monitor_session" \
-  "bash -lc 'source $CONDA_SETUP && conda activate $CONDA_ENV && cd $SCRIPT_DIR && PYTHONUNBUFFERED=1 python monitor_student_ablation.py $LOG_ROOT/${STUDENT_RUNS[0]} $LOG_ROOT/${STUDENT_RUNS[1]} $LOG_ROOT/${STUDENT_RUNS[2]} > $LOG_ROOT/student_stop_monitor.log 2>&1'"
+  "bash -lc 'source $CONDA_SETUP && conda activate $CONDA_ENV && export LD_LIBRARY_PATH=\$CONDA_PREFIX/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH} && cd $SCRIPT_DIR && PYTHONUNBUFFERED=1 python monitor_student_ablation.py $LOG_ROOT/${STUDENT_RUNS[0]} $LOG_ROOT/${STUDENT_RUNS[1]} $LOG_ROOT/${STUDENT_RUNS[2]} > $LOG_ROOT/student_stop_monitor.log 2>&1'"
 
 wait_for_sessions "${STUDENT_RUNS[@]}" "$monitor_session"
 decision="$LOG_ROOT/${STUDENT_RUNS[0]}/common_stop_decision.json"

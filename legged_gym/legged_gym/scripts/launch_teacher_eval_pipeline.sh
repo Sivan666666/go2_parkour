@@ -7,7 +7,7 @@ LOG_ROOT="$REPO_ROOT/legged_gym/logs/aaai_ablation"
 RESULT_ROOT="$REPO_ROOT/legged_gym/results/aaai_ablation"
 MANIFEST="$SCRIPT_DIR/manifests/hollow_stairs_v1.json"
 CONDA_SETUP="/home/ps/miniconda3/etc/profile.d/conda.sh"
-CONDA_ENV="txc_go2parkour"
+CONDA_ENV="${CONDA_ENV:-txc_go2parkour}"
 PIPELINE_LOG="$LOG_ROOT/teacher_eval_pipeline.log"
 
 TEACHER_RUNS=(
@@ -56,7 +56,7 @@ start_eval_job() {
   mkdir -p "$output_dir"
   tmux kill-session -t "$session" 2>/dev/null || true
   tmux new-session -d -s "$session" \
-    "bash -lc 'source $CONDA_SETUP && conda activate $CONDA_ENV && cd $SCRIPT_DIR && PYTHONUNBUFFERED=1 python run_eval_suite.py --exptid $run --checkpoint $checkpoint --reward_profile $profile --suite $suite --manifest $MANIFEST --episodes 200 --device cuda:$gpu --proj_name aaai_ablation --output_dir $output_dir > $output_dir/eval.log 2>&1'"
+    "bash -lc 'source $CONDA_SETUP && conda activate $CONDA_ENV && export LD_LIBRARY_PATH=\$CONDA_PREFIX/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH} && cd $SCRIPT_DIR && PYTHONUNBUFFERED=1 python run_eval_suite.py --exptid $run --checkpoint $checkpoint --reward_profile $profile --suite $suite --manifest $MANIFEST --episodes 200 --device cuda:$gpu --proj_name aaai_ablation --output_dir $output_dir > $output_dir/eval.log 2>&1'"
 }
 
 echo "$(timestamp) waiting for teacher training"
@@ -72,6 +72,7 @@ echo "$(timestamp) all teacher checkpoints are ready"
 
 source "$CONDA_SETUP"
 conda activate "$CONDA_ENV"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cd "$SCRIPT_DIR"
 python evaluate_ablation.py \
   --task go2 \
