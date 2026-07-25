@@ -125,9 +125,11 @@ def configure_terrain(env_cfg, condition, episodes):
         env_cfg.terrain.max_init_terrain_level = 4
     else:
         env_cfg.terrain.fixed_difficulty = float(condition["difficulty"])
-        env_cfg.terrain.num_rows = 1
+        # Isaac Gym's hollow-stair mesh path is unstable with a single terrain
+        # row. Five identical rows retain fixed geometry and match playv3.
+        env_cfg.terrain.num_rows = 5
         env_cfg.terrain.curriculum = False
-        env_cfg.terrain.max_init_terrain_level = 0
+        env_cfg.terrain.max_init_terrain_level = 4
     env_cfg.terrain.max_difficulty = False
     env_cfg.env.randomize_start_pos = False
 
