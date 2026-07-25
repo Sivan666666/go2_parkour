@@ -5,11 +5,29 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 from pathlib import Path
+from statistics import NormalDist
 
 import numpy as np
 
-from evaluate_ablation import wilson_interval
+
+def wilson_interval(successes, trials, confidence=0.95):
+    if trials == 0:
+        return 0.0, 0.0
+    z = NormalDist().inv_cdf(0.5 + confidence / 2)
+    probability = successes / trials
+    denominator = 1 + z * z / trials
+    center = (probability + z * z / (2 * trials)) / denominator
+    radius = (
+        z
+        * math.sqrt(
+            probability * (1 - probability) / trials
+            + z * z / (4 * trials * trials)
+        )
+        / denominator
+    )
+    return center - radius, center + radius
 
 
 def read_rows(paths):
