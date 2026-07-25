@@ -15,6 +15,10 @@ import torch
 
 from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.envs import *  # noqa: F401,F403 - registers tasks
+from legged_gym.envs.go2.ablation_profiles import (
+    apply_frozen_training_profile,
+    apply_reward_profile,
+)
 from legged_gym.utils import get_args, task_registry
 
 
@@ -169,12 +173,20 @@ def evaluate(args):
     args.resumeid = args.exptid
 
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
+    reward_profile = args.reward_profile
+    if reward_profile is not None:
+        apply_frozen_training_profile(env_cfg)
+        apply_reward_profile(env_cfg, reward_profile)
     configure_terrain(env_cfg, condition, episodes)
+    # make_env applies CLI profiles after the explicit condition. Temporarily
+    # disable that second application so it cannot restore the training mix.
+    args.reward_profile = None
     env, env_cfg = task_registry.make_env(
         name=args.task, args=args, env_cfg=env_cfg
     )
     obs = env.get_observations()
 
+    args.reward_profile = reward_profile
     train_cfg.runner.resume = True
     runner, train_cfg = task_registry.make_alg_runner(
         log_root=None,

@@ -151,6 +151,16 @@ class OnPolicyRunner:
                 record[key] = float(value)
         with open(self.metrics_path, "a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, sort_keys=True) + "\n")
+
+    def _external_stop_requested(self):
+        if self.log_dir is None:
+            return False
+        path = os.path.join(self.log_dir, "stop_at_iteration.txt")
+        if not os.path.isfile(path):
+            return False
+        with open(path, "r", encoding="utf-8") as stream:
+            stop_iteration = int(stream.read().strip())
+        return self.current_learning_iteration >= stop_iteration
         
 
     def learn_RL(self, num_learning_iterations, init_at_random_ep_len=False):
@@ -256,6 +266,12 @@ class OnPolicyRunner:
                     )
                 )
             ep_infos.clear()
+            if self._external_stop_requested():
+                print(
+                    "External common-stop target reached at iteration "
+                    f"{self.current_learning_iteration}."
+                )
+                break
         
         if self.log_dir is not None:
             self.save(
@@ -389,6 +405,12 @@ class OnPolicyRunner:
                     )
                 )
             ep_infos.clear()
+            if self._external_stop_requested():
+                print(
+                    "External common-stop target reached at iteration "
+                    f"{self.current_learning_iteration}."
+                )
+                break
         if self.log_dir is not None:
             self.save(
                 os.path.join(
@@ -433,7 +455,7 @@ class OnPolicyRunner:
         
         wandb.log(wandb_dict, step=locs['it'])
 
-        str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
+        str = f" \033[1m Learning iteration {locs['it']}/{locs['tot_iter']} \033[0m "
 
         if len(locs['rewbuffer']) > 0:
             log_string = (f"""{'#' * width}\n"""
@@ -512,7 +534,7 @@ class OnPolicyRunner:
 
         wandb.log(wandb_dict, step=locs['it'])
 
-        str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
+        str = f" \033[1m Learning iteration {locs['it']}/{locs['tot_iter']} \033[0m "
 
         if len(locs['rewbuffer']) > 0:
             log_string = (f"""{'#' * width}\n"""
