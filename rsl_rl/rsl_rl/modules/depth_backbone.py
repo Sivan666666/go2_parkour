@@ -1100,6 +1100,145 @@ class RecurrentDepthBackbone_TASM(nn.Module):
             h, c = self.hidden_states
             self.hidden_states = (h.detach().clone(), c.detach().clone())
 
+    def reset(self, dones=None):
+        """Reset all state, or only the environments selected by ``dones``."""
+        self.hidden_states = _reset_recurrent_state(self.hidden_states, dones)
+
+
+def _reset_recurrent_state(hidden_states, dones=None):
+    if hidden_states is None:
+        return None
+    if dones is None:
+        return None
+    done_mask = dones.reshape(-1).bool()
+    if not torch.any(done_mask):
+        return hidden_states
+    if isinstance(hidden_states, tuple):
+        reset_states = []
+        for state in hidden_states:
+            state = state.clone()
+            state[:, done_mask, :] = 0
+            reset_states.append(state)
+        return tuple(reset_states)
+    hidden_states = hidden_states.clone()
+    hidden_states[:, done_mask, :] = 0
+    return hidden_states
+
+
+class _ControlledTASMBase(nn.Module):
+    """Shared controlled-ablation encoder used by variants A and B."""
+
+    def __init__(self, base_backbone, env_cfg, use_cross_attention):
+        super().__init__()
+        activation = nn.ELU()
+        self.base_backbone = base_backbone
+        self.proprio_dim = 53 if env_cfg is None else env_cfg.env.n_proprio
+        self.embed_dim = 64
+        self.rnn_hidden = 512
+        self.use_cross_attention = use_cross_attention
+
+        self.intent_encoder = nn.Sequential(
+            nn.Linear(self.proprio_dim, 128),
+            activation,
+            nn.Linear(128, self.embed_dim),
+        )
+        if use_cross_attention:
+            self.cross_attn = nn.MultiheadAttention(
+                embed_dim=self.embed_dim, num_heads=4, batch_first=True
+            )
+            self.fusion = nn.LayerNorm(self.embed_dim)
+        else:
+            self.fusion = nn.Sequential(
+                nn.Linear(2 * self.embed_dim, self.embed_dim),
+                activation,
+                nn.LayerNorm(self.embed_dim),
+            )
+
+        self.rnn = nn.LSTM(
+            input_size=self.embed_dim + self.proprio_dim,
+            hidden_size=self.rnn_hidden,
+            num_layers=2,
+            batch_first=True,
+        )
+        self.output_mlp = nn.Sequential(
+            nn.Linear(self.rnn_hidden, 256),
+            activation,
+            nn.Linear(256, 34),
+            nn.Tanh(),
+        )
+        self.hidden_states = None
+
+    def forward(self, depth_image, proprioception):
+        depth_patches = self.base_backbone(depth_image)
+        intent_query = self.intent_encoder(proprioception)
+        if self.use_cross_attention:
+            attention, _ = self.cross_attn(
+                query=intent_query.unsqueeze(1),
+                key=depth_patches,
+                value=depth_patches,
+            )
+            visual_context = self.fusion(attention.squeeze(1))
+        else:
+            pooled_depth = depth_patches.mean(dim=1)
+            visual_context = self.fusion(
+                torch.cat([pooled_depth, intent_query], dim=-1)
+            )
+
+        rnn_input = torch.cat([visual_context, proprioception], dim=-1).unsqueeze(1)
+        rnn_output, self.hidden_states = self.rnn(rnn_input, self.hidden_states)
+        return self.output_mlp(rnn_output.squeeze(1))
+
+    def detach_hidden_states(self):
+        if self.hidden_states is not None:
+            h, c = self.hidden_states
+            self.hidden_states = (h.detach().clone(), c.detach().clone())
+
+    def reset(self, dones=None):
+        self.hidden_states = _reset_recurrent_state(self.hidden_states, dones)
+
+
+class RecurrentDepthBackbone_ConcatLSTM(_ControlledTASMBase):
+    """Variant A: mean-pooled visual tokens + concatenation + two-layer LSTM."""
+
+    def __init__(self, base_backbone, env_cfg):
+        super().__init__(base_backbone, env_cfg, use_cross_attention=False)
+
+
+class RecurrentDepthBackbone_CrossAttentionLSTM(_ControlledTASMBase):
+    """Variant B: proprioceptive cross-attention + two-layer LSTM."""
+
+    def __init__(self, base_backbone, env_cfg):
+        super().__init__(base_backbone, env_cfg, use_cross_attention=True)
+
+
+VISION_POLICY_VARIANTS = (
+    "concat_lstm",
+    "crossattn_lstm",
+    "crossattn_sru",
+)
+
+
+def build_depth_encoder(policy_variant, env_cfg, policy_cfg, depth_encoder_cfg):
+    """Build an explicitly named vision encoder; never rely on source aliases."""
+    variant = policy_variant or "crossattn_sru"
+    if variant not in VISION_POLICY_VARIANTS:
+        raise ValueError(
+            f"Unknown policy variant {variant!r}; expected {VISION_POLICY_VARIANTS}"
+        )
+    backbone = DepthBackbone_TASM(
+        env_cfg.env.n_proprio,
+        policy_cfg["scan_encoder_dims"][-1],
+        depth_encoder_cfg["hidden_dims"],
+    )
+    encoder_classes = {
+        "concat_lstm": RecurrentDepthBackbone_ConcatLSTM,
+        "crossattn_lstm": RecurrentDepthBackbone_CrossAttentionLSTM,
+        "crossattn_sru": RecurrentDepthBackbone_TASM,
+    }
+    encoder = encoder_classes[variant](backbone, env_cfg)
+    encoder.policy_variant = variant
+    return encoder
+
 # # 使用别名保持兼容性
 # RecurrentDepthBackbone = RecurrentDepthBackbone_LocoTransformer
 # DepthOnlyFCBackbone58x87 = DepthBackboneLocoTransformer

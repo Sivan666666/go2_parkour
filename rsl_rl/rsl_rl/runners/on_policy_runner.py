@@ -30,6 +30,7 @@
 
 import time
 import os
+import json
 from collections import deque
 import statistics
 
@@ -77,12 +78,25 @@ class OnPolicyRunner:
         # Depth encoder
         self.if_depth = self.depth_encoder_cfg["if_depth"]
         if self.if_depth:
-            depth_backbone = DepthOnlyFCBackbone58x87(env.cfg.env.n_proprio, 
-                                                    self.policy_cfg["scan_encoder_dims"][-1], 
-                                                    self.depth_encoder_cfg["hidden_dims"],
-                                                    )
-            depth_encoder = RecurrentDepthBackbone(depth_backbone, env.cfg).to(self.device)
+            policy_variant = self.depth_encoder_cfg.get(
+                "policy_variant", "crossattn_sru"
+            )
+            depth_encoder = build_depth_encoder(
+                policy_variant,
+                env.cfg,
+                self.policy_cfg,
+                self.depth_encoder_cfg,
+            ).to(self.device)
             depth_actor = deepcopy(actor_critic.actor)
+            trainable_parameters = sum(
+                parameter.numel()
+                for parameter in depth_encoder.parameters()
+                if parameter.requires_grad
+            )
+            print(
+                f"Vision policy variant: {policy_variant} "
+                f"({trainable_parameters:,} trainable encoder parameters)"
+            )
         else:
             depth_encoder = None
             depth_actor = None
@@ -116,6 +130,27 @@ class OnPolicyRunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
+        self.metrics_path = (
+            os.path.join(self.log_dir, "training_metrics.jsonl")
+            if self.log_dir is not None
+            else None
+        )
+
+    def _record_training_metrics(self, iteration, **metrics):
+        if self.metrics_path is None:
+            return
+        record = {
+            "iteration": int(iteration),
+            "wall_time_s": float(self.tot_time),
+            "terrain_level_mean": float(
+                self.env.terrain_levels.float().mean().item()
+            ) if hasattr(self.env, "terrain_levels") else None,
+        }
+        for key, value in metrics.items():
+            if value is not None:
+                record[key] = float(value)
+        with open(self.metrics_path, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record, sort_keys=True) + "\n")
         
 
     def learn_RL(self, num_learning_iterations, init_at_random_ep_len=False):
@@ -202,21 +237,32 @@ class OnPolicyRunner:
             
             stop = time.time()
             learn_time = stop - start
+            completed_iteration = it + 1
+            self.current_learning_iteration = completed_iteration
             if self.log_dir is not None:
                 self.log(locals())
-            if it < 2500:
-                if it % self.save_interval == 0:
-                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
-            elif it < 5000:
-                if it % (2*self.save_interval) == 0:
-                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
-            else:
-                if it % (5*self.save_interval) == 0:
-                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+                self._record_training_metrics(
+                    completed_iteration,
+                    mean_reward=statistics.mean(rewbuffer) if rewbuffer else None,
+                    mean_episode_length=statistics.mean(lenbuffer) if lenbuffer else None,
+                )
+            if (
+                self.log_dir is not None
+                and completed_iteration % self.save_interval == 0
+            ):
+                self.save(
+                    os.path.join(
+                        self.log_dir, f"model_{completed_iteration}.pt"
+                    )
+                )
             ep_infos.clear()
         
-        # self.current_learning_iteration += num_learning_iterations
-        self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
+        if self.log_dir is not None:
+            self.save(
+                os.path.join(
+                    self.log_dir, f"model_{self.current_learning_iteration}.pt"
+                )
+            )
 
     def learn_vision(self, num_learning_iterations, init_at_random_ep_len=False):
         tot_iter = self.current_learning_iteration + num_learning_iterations
@@ -279,6 +325,12 @@ class OnPolicyRunner:
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions_student.detach())  # obs has changed to next_obs !! if done obs has been reset
                 critic_obs = privileged_obs if privileged_obs is not None else obs
                 obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
+                if hasattr(self.alg.depth_encoder, "reset"):
+                    self.alg.depth_encoder.reset(dones)
+                if torch.any(dones) and infos.get("depth") is None:
+                    infos["depth"] = self.env.depth_buffer[:, -1].clone().to(
+                        self.device
+                    )
 
                 if self.log_dir is not None:
                         # Book keeping
@@ -317,13 +369,32 @@ class OnPolicyRunner:
 
             self.alg.depth_encoder.detach_hidden_states()
 
+            completed_iteration = it + 1
+            self.current_learning_iteration = completed_iteration
             if self.log_dir is not None:
                 self.log_vision(locals())
-            if (it-self.start_learning_iteration < 2500 and it % self.save_interval == 0) or \
-               (it-self.start_learning_iteration < 5000 and it % (2*self.save_interval) == 0) or \
-               (it-self.start_learning_iteration >= 5000 and it % (5*self.save_interval) == 0):
-                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+                self._record_training_metrics(
+                    completed_iteration,
+                    mean_reward=statistics.mean(rewbuffer) if rewbuffer else None,
+                    mean_episode_length=statistics.mean(lenbuffer) if lenbuffer else None,
+                    depth_actor_loss=depth_actor_loss,
+                )
+            if (
+                self.log_dir is not None
+                and completed_iteration % self.save_interval == 0
+            ):
+                self.save(
+                    os.path.join(
+                        self.log_dir, f"model_{completed_iteration}.pt"
+                    )
+                )
             ep_infos.clear()
+        if self.log_dir is not None:
+            self.save(
+                os.path.join(
+                    self.log_dir, f"model_{self.current_learning_iteration}.pt"
+                )
+            )
     
     def log_vision(self, locs, width=80, pad=35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
@@ -492,6 +563,12 @@ class OnPolicyRunner:
             'optimizer_state_dict': self.alg.optimizer.state_dict(),
             'iter': self.current_learning_iteration,
             'infos': infos,
+            'experiment_metadata': {
+                'policy_variant': self.depth_encoder_cfg.get(
+                    'policy_variant', 'teacher'
+                ) if self.if_depth else 'teacher',
+                'reward_profile': self.cfg.get('reward_profile'),
+            },
             }
         if self.if_depth:
             state_dict['depth_encoder_state_dict'] = self.alg.depth_encoder.state_dict()

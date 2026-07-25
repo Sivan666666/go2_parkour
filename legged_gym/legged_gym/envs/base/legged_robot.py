@@ -1038,6 +1038,7 @@ class LeggedRobot(BaseTask):
         self.last_contacts = contact
         self.feet_pos = self.rigid_body_states.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices, 0:3]
         self.feet_vel = self.rigid_body_states.view(self.num_envs, self.num_bodies, 13)[:, self.feet_indices, 7:10]
+        self._update_foot_diagnostics()
         # self._update_jump_schedule()
         self._update_goals()
         self._post_physics_step_callback()
@@ -1046,6 +1047,22 @@ class LeggedRobot(BaseTask):
         self.check_termination()
         self.compute_reward()
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        terminal_success = self.reset_buf & (
+            self.cur_goal_idx >= self.cfg.terrain.num_goals
+        )
+        self.extras["terminal_success"] = terminal_success.clone()
+        self.extras["terminal_progress"] = (
+            torch.clamp(
+                self.cur_goal_idx.float(),
+                min=0,
+                max=self.cfg.terrain.num_goals,
+            )
+            / float(self.cfg.terrain.num_goals)
+        ).clone()
+        self.extras["terminal_episode_length"] = self.episode_length_buf.clone()
+        self.extras["terminal_timeout"] = (
+            self.reset_buf & self.time_out_buf & ~terminal_success
+        ).clone()
         self.reset_idx(env_ids)
 
         self.cur_goals = self._gather_cur_goals()
@@ -2645,15 +2662,30 @@ class LeggedRobot(BaseTask):
         return rew.float()
 
     def _reward_feet_edge(self):
-        # 惩罚踩在边缘的落足
+        return (self.terrain_levels > 3) * torch.sum(
+            self.feet_at_edge, dim=-1
+        )
+
+    def _update_foot_diagnostics(self):
+        """Compute reward-independent foot events for fair evaluation."""
         feet_pos_xy = ((self.rigid_body_states[:, self.feet_indices, :2] + self.terrain.cfg.border_size) / self.cfg.terrain.horizontal_scale).round().long()  # (num_envs, 4, 2)
         feet_pos_xy[..., 0] = torch.clip(feet_pos_xy[..., 0], 0, self.x_edge_mask.shape[0]-1)
         feet_pos_xy[..., 1] = torch.clip(feet_pos_xy[..., 1], 0, self.x_edge_mask.shape[1]-1)
         feet_at_edge = self.x_edge_mask[feet_pos_xy[..., 0], feet_pos_xy[..., 1]]
-    
         self.feet_at_edge = self.contact_filt & feet_at_edge
-        rew = (self.terrain_levels > 3) * torch.sum(self.feet_at_edge, dim=-1)
-        return rew
+
+        hollow_x = torch.clip(
+            feet_pos_xy[..., 0], 0, self.hollow_height_map.shape[0] - 1
+        )
+        hollow_y = torch.clip(
+            feet_pos_xy[..., 1], 0, self.hollow_height_map.shape[1] - 1
+        )
+        target_height = self.hollow_height_map[hollow_x, hollow_y]
+        foot_height = self.feet_pos[:, :, 2]
+        self.feet_under_hollow = (
+            (target_height > 0.01)
+            & (foot_height < target_height - 0.02)
+        )
 
     def _reward_base_height(self):
         # Penalize base height away from target
@@ -2719,28 +2751,7 @@ class LeggedRobot(BaseTask):
     
     def _reward_feet_hollow(self):
         """ 惩罚脚掉进空心楼梯板子下方的行为 """
-        # 1. 获取脚的 XY 像素索引
-        feet_pos_xy = ((self.rigid_body_states[:, self.feet_indices, :2] + self.terrain.cfg.border_size) / self.cfg.terrain.horizontal_scale).round().long()
-        feet_pos_xy[..., 0] = torch.clip(feet_pos_xy[..., 0], 0, self.hollow_height_map.shape[0]-1)
-        feet_pos_xy[..., 1] = torch.clip(feet_pos_xy[..., 1], 0, self.hollow_height_map.shape[1]-1)
-
-        # 2. 查询对应位置的台阶表面高度
-        # target_h 的 shape: (num_envs, 4)
-        target_h = self.hollow_height_map[feet_pos_xy[..., 0], feet_pos_xy[..., 1]]
-
-        # 3. 判定判定
-        # a. 该位置确实是空心台阶区域 (target_h > 0)
-        # b. 脚的高度明显低于台阶表面高度 (这里留 2cm 的容差，比如脚厚度或传感器误差)
-        # c. 脚当前有接触力（说明踩到了空洞底部的地面）
-        foot_z = self.feet_pos[:, :, 2]
-        
-        # 掉进下方的判定掩码
-        is_underneath = (target_h > 0.01) & (foot_z < (target_h - 0.02))
-        
-        # 只有当脚落地(接触力>1.0)且在板子下面时才惩罚
-        # punish_mask = is_underneath & (self.contact_forces[:, self.feet_indices, 2] > 1.0)
-        
-        return torch.sum(is_underneath.float(), dim=-1)
+        return torch.sum(self.feet_under_hollow.float(), dim=-1)
     
     # def _reward_no_move_when_command(self):
     #     # 取命令范围阈值

@@ -163,6 +163,13 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             print("Automatically adding action delay !!!")
             env_cfg.domain_rand.action_delay = True
             env_cfg.domain_rand.action_curr_step = env_cfg.domain_rand.action_curr_step_scratch
+        if args.reward_profile is not None:
+            from legged_gym.envs.go2.ablation_profiles import (
+                apply_frozen_training_profile,
+                apply_reward_profile,
+            )
+            apply_frozen_training_profile(env_cfg)
+            apply_reward_profile(env_cfg, args.reward_profile)
     if cfg_train is not None:
         if args.seed is not None:
             cfg_train.seed = args.seed
@@ -182,6 +189,12 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             cfg_train.runner.load_run = args.load_run
         if args.checkpoint is not None:
             cfg_train.runner.checkpoint = args.checkpoint
+        if args.policy_variant is not None:
+            cfg_train.depth_encoder.policy_variant = args.policy_variant
+        if args.reward_profile is not None:
+            cfg_train.runner.reward_profile = args.reward_profile
+        if args.save_interval is not None:
+            cfg_train.runner.save_interval = args.save_interval
     print("*" * 80)
     return env_cfg, cfg_train
 
@@ -225,7 +238,23 @@ def get_args():
         {"name": "--hitid", "type": str, "default": None, "help": "exptid fot hitting policy"},
 
         {"name": "--web", "action": "store_true", "default": False, "help": "if use web viewer"},
-        {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"}
+        {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
+        {"name": "--reward_profile", "type": str, "default": None,
+         "help": "Frozen ablation reward profile: ep, ep_plus_three, current_full"},
+        {"name": "--policy_variant", "type": str, "default": None,
+         "help": "Vision ablation: concat_lstm, crossattn_lstm, crossattn_sru"},
+        {"name": "--save_interval", "type": int, "default": None,
+         "help": "Checkpoint interval in learning iterations"},
+        {"name": "--eval_manifest", "type": str, "default": None,
+         "help": "Evaluation manifest JSON path"},
+        {"name": "--output_dir", "type": str, "default": None,
+         "help": "Directory for machine-readable evaluation output"},
+        {"name": "--episodes", "type": int, "default": None,
+         "help": "Override episodes per evaluation condition"},
+        {"name": "--eval_suite", "type": str, "default": "quick",
+         "help": "Manifest suite to run: quick or full"},
+        {"name": "--eval_condition", "type": str, "default": None,
+         "help": "Run only one named manifest condition"}
 
 
     ]

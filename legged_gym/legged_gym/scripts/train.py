@@ -30,14 +30,61 @@
 
 import numpy as np
 import os
+import hashlib
+import json
+import subprocess
 from datetime import datetime
 
 import isaacgym
 from legged_gym.envs import *
-from legged_gym.utils import get_args, task_registry
+from legged_gym.utils import get_args, task_registry, class_to_dict
 from shutil import copyfile
 import torch
 import wandb
+
+
+def _git_value(*arguments):
+    try:
+        return subprocess.check_output(
+            ["git", *arguments],
+            cwd=LEGGED_GYM_ROOT_DIR,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        return None
+
+
+def _write_experiment_metadata(log_path, args, env_cfg, train_cfg):
+    env_dict = class_to_dict(env_cfg)
+    train_dict = class_to_dict(train_cfg)
+    config_json = json.dumps(
+        {"env": env_dict, "train": train_dict},
+        sort_keys=True,
+        default=str,
+    )
+    diff = _git_value("diff", "--binary") or ""
+    metadata = {
+        "created_at": datetime.now().astimezone().isoformat(),
+        "git_sha": _git_value("rev-parse", "HEAD"),
+        "git_branch": _git_value("branch", "--show-current"),
+        "git_diff_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
+        "config_sha256": hashlib.sha256(config_json.encode("utf-8")).hexdigest(),
+        "reward_profile": getattr(args, "reward_profile", None),
+        "policy_variant": getattr(args, "policy_variant", None),
+        "seed": getattr(args, "seed", None),
+        "teacher": getattr(args, "resumeid", None),
+        "max_iterations": train_cfg.runner.max_iterations,
+        "arguments": vars(args),
+        "environment_config": env_dict,
+        "training_config": train_dict,
+    }
+    with open(
+        os.path.join(log_path, "experiment_metadata.json"),
+        "w",
+        encoding="utf-8",
+    ) as stream:
+        json.dump(metadata, stream, indent=2, sort_keys=True, default=str)
 
 def train(args):
     args.headless = True
@@ -115,6 +162,7 @@ def train(args):
 
     env, env_cfg = task_registry.make_env(name=args.task, args=args)
     ppo_runner, train_cfg = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args)
+    _write_experiment_metadata(log_pth, args, env_cfg, train_cfg)
     ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=True)
 
 if __name__ == '__main__':
