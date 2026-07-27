@@ -180,6 +180,11 @@ def evaluate(args):
         apply_frozen_training_profile(env_cfg)
         apply_reward_profile(env_cfg, reward_profile)
     configure_terrain(env_cfg, condition, episodes)
+    # update_cfg_from_args applies the headless-camera defaults inside
+    # make_env. Keep those defaults aligned with the manifest condition so
+    # they cannot restore the 10x20 training grid during evaluation.
+    env_cfg.depth.camera_terrain_num_rows = env_cfg.terrain.num_rows
+    env_cfg.depth.camera_terrain_num_cols = env_cfg.terrain.num_cols
     # make_env applies CLI profiles after the explicit condition. Temporarily
     # disable that second application so it cannot restore the training mix.
     args.reward_profile = None
