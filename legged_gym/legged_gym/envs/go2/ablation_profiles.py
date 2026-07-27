@@ -11,6 +11,7 @@ from typing import Dict
 
 
 REWARD_PROFILES = ("ep", "ep_plus_three", "current_full")
+DOMAIN_RAND_PROFILES = ("teacher32500",)
 
 
 _ALL_REWARD_SCALES = {
@@ -163,3 +164,28 @@ def apply_frozen_training_profile(env_cfg) -> None:
         env_cfg.terrain.terrain_dict.values()
     )
     env_cfg.ablation_training_profile = "stairmaster_current_2026_07_25"
+
+
+def apply_domain_rand_profile(env_cfg, profile: str) -> None:
+    """Apply an audited domain-randomization override.
+
+    ``teacher32500`` reproduces the ranges saved with
+    Tea-ps2-mlp_armature_53_noise_reward_dof/model_32500.pt.  It is applied
+    after the common ablation training profile so the terrain and reward
+    controls remain unchanged.
+    """
+    if profile not in DOMAIN_RAND_PROFILES:
+        raise ValueError(
+            f"Unknown domain-randomization profile {profile!r}; "
+            f"expected one of {DOMAIN_RAND_PROFILES}"
+        )
+
+    env_cfg.domain_rand.randomize_friction = True
+    env_cfg.domain_rand.friction_range = [0.6, 2.0]
+    env_cfg.domain_rand.randomize_base_mass = True
+    env_cfg.domain_rand.added_mass_range = [0.0, 5.0]
+    env_cfg.domain_rand.randomize_base_com = True
+    env_cfg.domain_rand.added_com_range = [-0.2, 0.2]
+    env_cfg.domain_rand.randomize_motor = True
+    env_cfg.domain_rand.motor_strength_range = [0.6, 1.2]
+    env_cfg.ablation_domain_rand_profile = profile

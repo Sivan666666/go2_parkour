@@ -71,6 +71,7 @@ def _write_experiment_metadata(log_path, args, env_cfg, train_cfg):
         "git_diff_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
         "config_sha256": hashlib.sha256(config_json.encode("utf-8")).hexdigest(),
         "reward_profile": getattr(args, "reward_profile", None),
+        "domain_rand_profile": getattr(args, "domain_rand_profile", None),
         "policy_variant": getattr(args, "policy_variant", None),
         "seed": getattr(args, "seed", None),
         "teacher": getattr(args, "resumeid", None),

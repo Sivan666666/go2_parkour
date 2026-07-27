@@ -170,6 +170,11 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             )
             apply_frozen_training_profile(env_cfg)
             apply_reward_profile(env_cfg, args.reward_profile)
+        if args.domain_rand_profile is not None:
+            from legged_gym.envs.go2.ablation_profiles import (
+                apply_domain_rand_profile,
+            )
+            apply_domain_rand_profile(env_cfg, args.domain_rand_profile)
     if cfg_train is not None:
         if args.seed is not None:
             cfg_train.seed = args.seed
@@ -241,6 +246,8 @@ def get_args():
         {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
         {"name": "--reward_profile", "type": str, "default": None,
          "help": "Frozen ablation reward profile: ep, ep_plus_three, current_full"},
+        {"name": "--domain_rand_profile", "type": str, "default": None,
+         "help": "Audited domain-randomization override: teacher32500"},
         {"name": "--policy_variant", "type": str, "default": None,
          "help": "Vision ablation: concat_lstm, crossattn_lstm, crossattn_sru"},
         {"name": "--save_interval", "type": int, "default": None,
