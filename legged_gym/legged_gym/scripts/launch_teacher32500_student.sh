@@ -44,7 +44,9 @@ fi
 mkdir -p "$RUN_DIR"
 source "$CONDA_SETUP"
 conda activate "$CONDA_ENV"
-export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+if [[ "${PREPEND_CONDA_LIB:-1}" == "1" ]]; then
+  export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 export CUDA_VISIBLE_DEVICES="$PHYSICAL_GPU"
 export PYTHONPATH="$REPO_ROOT/legged_gym:$REPO_ROOT/rsl_rl${PYTHONPATH:+:$PYTHONPATH}"
 
