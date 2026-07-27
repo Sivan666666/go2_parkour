@@ -27,6 +27,9 @@ PHYSICAL_GPU="${PHYSICAL_GPU:-0}"
 DEVICE="${DEVICE:-cuda:0}"
 CONDA_SETUP="${CONDA_SETUP:-/home/ps/miniconda3/etc/profile.d/conda.sh}"
 CONDA_ENV="${CONDA_ENV:-txc_go2parkour}"
+NUM_ENVS="${NUM_ENVS:-}"
+TERRAIN_ROWS="${TERRAIN_ROWS:-}"
+TERRAIN_COLS="${TERRAIN_COLS:-}"
 
 LOG_ROOT="$REPO_ROOT/legged_gym/logs/$PROJECT_NAME"
 RUN_DIR="$LOG_ROOT/$RUN_NAME"
@@ -51,6 +54,16 @@ export CUDA_VISIBLE_DEVICES="$PHYSICAL_GPU"
 export PYTHONPATH="$REPO_ROOT/legged_gym:$REPO_ROOT/rsl_rl${PYTHONPATH:+:$PYTHONPATH}"
 
 cd "$SCRIPT_DIR"
+extra_args=()
+if [[ -n "$NUM_ENVS" ]]; then
+  extra_args+=(--num_envs "$NUM_ENVS")
+fi
+if [[ -n "$TERRAIN_ROWS" ]]; then
+  extra_args+=(--rows "$TERRAIN_ROWS")
+fi
+if [[ -n "$TERRAIN_COLS" ]]; then
+  extra_args+=(--cols "$TERRAIN_COLS")
+fi
 exec python train.py \
   --task go2 \
   --exptid "$RUN_NAME" \
@@ -67,4 +80,5 @@ exec python train.py \
   --checkpoint "$TEACHER_CHECKPOINT" \
   --use_camera \
   --delay \
-  --no_wandb
+  --no_wandb \
+  "${extra_args[@]}"
