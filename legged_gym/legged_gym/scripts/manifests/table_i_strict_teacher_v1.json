@@ -1,0 +1,15 @@
+{
+  "name": "table_i_strict_teacher_v1",
+  "description": "Table I protocol for the Strict-T1 privileged teacher on the paper's shared evaluation terrain. Fixed-angle difficulties invert width=0.4-0.2*d, regular rise=0.1+(0.05*9/7)*d, and steep rise=0.1+(0.13*9/7)*d. Average Reached Steps is cur_goal_idx/5.",
+  "episode_length_s": 20,
+  "episodes_per_condition": 200,
+  "conditions": [
+    {"name": "flat_0deg", "stair_type": "flat", "difficulty": 0.0, "angle_deg": 0.0, "seed": 4000, "suites": ["table_i"]},
+    {"name": "hollow_20deg", "stair_type": "regular", "difficulty": 0.332566188675, "angle_deg": 20.0, "seed": 4020, "suites": ["table_i"]},
+    {"name": "hollow_30deg", "stair_type": "regular", "difficulty": 0.728433412973, "angle_deg": 30.0, "seed": 4030, "suites": ["table_i"]},
+    {"name": "hollow_40deg", "stair_type": "regular", "difficulty": 1.015226738746, "angle_deg": 40.0, "seed": 4040, "suites": ["table_i"]},
+    {"name": "hollow_50deg", "stair_type": "steep", "difficulty": 0.928994834069, "angle_deg": 50.0, "seed": 4050, "suites": ["table_i"]},
+    {"name": "hollow_55deg", "stair_type": "steep", "difficulty": 1.040830098781, "angle_deg": 55.0, "seed": 4055, "suites": ["table_i"]},
+    {"name": "mixed", "stair_type": "mixed", "difficulty": "mixed", "angle_deg": null, "seed": 4100, "suites": ["table_i"]}
+  ]
+}

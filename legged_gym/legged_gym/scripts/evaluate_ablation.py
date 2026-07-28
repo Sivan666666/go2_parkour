@@ -67,10 +67,21 @@ def wilson_interval(successes, trials, confidence=0.95):
 def stair_angle_deg(stair_type, difficulty):
     if difficulty == "mixed":
         return None
+    if stair_type == "flat":
+        return 0.0
     width = 0.4 - 0.2 * float(difficulty)
     coefficient = 0.13 if stair_type == "steep" else 0.05
     height = 0.1 + coefficient * 9.0 / 7.0 * float(difficulty)
     return math.degrees(math.atan2(height, width))
+
+
+def condition_angle_deg(condition):
+    if "angle_deg" in condition:
+        return condition["angle_deg"]
+    return stair_angle_deg(
+        condition["stair_type"],
+        condition["difficulty"],
+    )
 
 
 def load_manifest(path):
@@ -109,6 +120,8 @@ def configure_terrain(env_cfg, condition, episodes):
     elif stair_type == "mixed":
         terrain["hollow stairs up"] = 0.5
         terrain["steep hollow stairs up"] = 0.5
+    elif stair_type == "flat":
+        terrain["flat"] = 1.0
     else:
         raise ValueError(f"Unknown stair type: {stair_type}")
 
@@ -256,10 +269,7 @@ def evaluate(args):
                 "condition": condition["name"],
                 "stair_type": condition["stair_type"],
                 "difficulty": condition["difficulty"],
-                "angle_deg": stair_angle_deg(
-                    condition["stair_type"],
-                    condition["difficulty"],
-                ),
+                "angle_deg": condition_angle_deg(condition),
                 "seed": condition["seed"],
                 "success": int(success),
                 "progress": float(

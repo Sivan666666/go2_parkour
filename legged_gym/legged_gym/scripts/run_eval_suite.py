@@ -14,8 +14,13 @@ def main():
     parser.add_argument("--exptid", required=True)
     parser.add_argument("--checkpoint", type=int, required=True)
     parser.add_argument("--reward_profile", required=True)
+    parser.add_argument("--domain_rand_profile", default=None)
     parser.add_argument("--policy_variant", default=None)
-    parser.add_argument("--suite", choices=("quick", "full"), default="quick")
+    parser.add_argument(
+        "--suite",
+        choices=("quick", "full", "table_i"),
+        default="quick",
+    )
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--episodes", type=int, default=None)
     parser.add_argument("--device", default="cuda:3")
@@ -61,6 +66,10 @@ def main():
             "--headless",
             "--no_wandb",
         ]
+        if args.domain_rand_profile is not None:
+            command.extend(
+                ["--domain_rand_profile", args.domain_rand_profile]
+            )
         if args.episodes is not None:
             command.extend(["--episodes", str(args.episodes)])
         if args.policy_variant is not None:
